@@ -1,0 +1,64 @@
+{
+  "startedAt": "2026-03-21T01:09:05.583Z",
+  "updatedAt": "2026-03-21T01:10:45.897Z",
+  "totalScraped": 16400,
+  "msgsPerSec": 193,
+  "channels": {
+    "1307528453079171122": {
+      "channelId": "1307528453079171122",
+      "guildId": "727881213406347282",
+      "totalScraped": 3300,
+      "lastBatchSize": 100,
+      "msgsPerSec": 37,
+      "rateLimitHits": 0,
+      "errors": [],
+      "lastUpdated": "2026-03-21T01:10:44.336Z",
+      "complete": false
+    },
+    "361511298451767297": {
+      "channelId": "361511298451767297",
+      "guildId": "319560327719026709",
+      "totalScraped": 3300,
+      "lastBatchSize": 100,
+      "msgsPerSec": 40,
+      "rateLimitHits": 0,
+      "errors": [],
+      "lastUpdated": "2026-03-21T01:10:44.830Z",
+      "complete": false
+    },
+    "549474735684059136": {
+      "channelId": "549474735684059136",
+      "guildId": "549470467522560011",
+      "totalScraped": 3300,
+      "lastBatchSize": 100,
+      "msgsPerSec": 38,
+      "rateLimitHits": 0,
+      "errors": [],
+      "lastUpdated": "2026-03-21T01:10:45.399Z",
+      "complete": false
+    },
+    "679877028991860876": {
+      "channelId": "679877028991860876",
+      "guildId": "679875946597056683",
+      "totalScraped": 3300,
+      "lastBatchSize": 100,
+      "msgsPerSec": 40,
+      "rateLimitHits": 0,
+      "errors": [],
+      "lastUpdated": "2026-03-21T01:10:45.897Z",
+      "complete": false
+    },
+    "404440555355897879": {
+      "channelId": "404440555355897879",
+      "guildId": "125440014904590336",
+      "totalScraped": 3200,
+      "lastBatchSize": 100,
+      "msgsPerSec": 38,
+      "rateLimitHits": 0,
+      "errors": [],
+      "lastUpdated": "2026-03-21T01:10:43.901Z",
+      "complete": false
+    }
+  },
+  "rateLimitLog": []
+}

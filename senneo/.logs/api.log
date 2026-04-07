@@ -1,0 +1,26 @@
+[auth] WARNING: JWT_SECRET not set — using ephemeral random secret. Set JWT_SECRET env var for stable sessions.
+[api] ScyllaDB connected
+[api] ClickHouse ready
+[api] Auth schema ready
+node:events:502
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1908:16)
+    at listenInCluster (node:net:1965:12)
+    at Server.listen (node:net:2067:7)
+    at Function.listen (/root/Project-Senneo/senneo/node_modules/express/lib/application.js:635:24)
+    at main (/root/Project-Senneo/senneo/packages/api/dist/index.js:78:9)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1944:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:82:21) {
+  code: 'EADDRINUSE',
+  errno: -98,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v20.20.1

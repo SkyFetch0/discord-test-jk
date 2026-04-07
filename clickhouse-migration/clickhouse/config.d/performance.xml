@@ -1,0 +1,81 @@
+<!-- ─────────────────────────────────────────────────────────────────────────
+     performance.xml — Senneo ClickHouse Performans Ayarları
+     Hedef: 200K msg/s ingest + analitik sorgular
+     Sunucu: Yüksek çekirdekli (16-32 core), 32-64 GB RAM varsayımı
+     ───────────────────────────────────────────────────────────────────────── -->
+<clickhouse>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         CPU ve Thread Ayarları
+         ═══════════════════════════════════════════════════════════════ -->
+
+    <!-- Arka planda merge ve mutation için thread sayısı.
+         3 projeksiyon + yüksek ingest hızı = yoğun merge yükü.
+         CPU çekirdek sayısının yarısı önerilir. -->
+    <background_pool_size>16</background_pool_size>
+
+    <!-- Her thread için eşzamanlı merge kapasitesi çarpanı.
+         16 * 2 = 32 paralel merge işlemi desteklenir. -->
+    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+
+    <!-- Zamanlanmış arka plan görevleri (TTL yok, minimum yeterli) -->
+    <background_schedule_pool_size>8</background_schedule_pool_size>
+
+    <!-- Diğer arka plan işlemleri -->
+    <background_common_pool_size>8</background_common_pool_size>
+
+    <!-- Disk'ler arası part taşıma (tiered storage için) -->
+    <background_move_pool_size>4</background_move_pool_size>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         Memory Ayarları
+         ═══════════════════════════════════════════════════════════════ -->
+
+    <!-- ClickHouse toplam sistem RAM'inin %80'ini kullanabilir.
+         32 GB RAM'de: ~25.6 GB CH'a tahsis edilir. -->
+    <max_server_memory_usage_to_ram_ratio>0.8</max_server_memory_usage_to_ram_ratio>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         Part Yönetimi
+         ═══════════════════════════════════════════════════════════════ -->
+
+    <!-- Toplam aktif part limiti. 500B mesaj + 3 projeksiyon + aylık
+         partition = çok part. Default 100000 genelde yeterli. -->
+    <max_parts_in_total>100000</max_parts_in_total>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         Network
+         ═══════════════════════════════════════════════════════════════ -->
+
+    <!-- Tüm interface'lerden dinle (Docker network için zorunlu) -->
+    <listen_host>::</listen_host>
+
+    <!-- Maksimum eşzamanlı bağlantı sayısı.
+         ingester (N instance) + API + dashboard = yüzlerce bağlantı -->
+    <max_connections>1024</max_connections>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         Async Insert — Server-side Batching
+         ═══════════════════════════════════════════════════════════════ -->
+
+    <!-- Ingester zaten 2000 satırlık client-side batch yapıyor.
+         Async insert, kısa süreli ingest burst'larında ek güvenlik katmanı sağlar.
+         wait_for_async_insert=1: insert acknowledge edilmeden önce flush'ı bekle. -->
+    <async_insert>1</async_insert>
+    <wait_for_async_insert>1</wait_for_async_insert>
+
+    <!-- Buffer 10 MB dolunca flush et -->
+    <async_insert_max_data_size>10485760</async_insert_max_data_size>
+
+    <!-- 2 saniye içinde dolmazsa yine de flush et -->
+    <async_insert_busy_timeout_ms>2000</async_insert_busy_timeout_ms>
+
+    <!-- 500 insert sorgusu birikince flush et -->
+    <async_insert_max_query_number>500</async_insert_max_query_number>
+
+    <!-- Buffer window içindeki duplikat insert'leri filtrele.
+         Kafka redelivery ve scraper restart'larından gelen duplikatlar
+         buradan önce elenir; ReplacingMergeTree ise kalıcı backstop'tur. -->
+    <async_insert_deduplicate>1</async_insert_deduplicate>
+
+</clickhouse>

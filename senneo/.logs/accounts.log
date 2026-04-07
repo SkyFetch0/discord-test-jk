@@ -1,0 +1,152 @@
+[db] Schema ready
+[checkpoint] 8 checkpoint yüklendi (ScyllaDB)
+[proxy] Proxy kapalı — direct bağlantı kullanılacak
+[kafka] Producer connected (idempotent mode)
+[accounts] Proxy KAPALI — doğrudan bağlantı (VDS IP)
+[accounts] Hesap (idx 2) giriş başarısız: Error [TOKEN_INVALID]: An invalid token was provided.
+    at WebSocketManager.createShards (/root/Project-Senneo/senneo/node_modules/discord.js-selfbot-v13/src/client/websocket/WebSocketManager.js:244:15)
+    at async Client.login (/root/Project-Senneo/senneo/node_modules/discord.js-selfbot-v13/src/client/Client.js:287:7) {
+  [Symbol(code)]: 'TOKEN_INVALID'
+}
+[accounts] Failed account detected: unknown_idx_2 (token: "NjU0ODU...r-g")
+[accounts] ✓ kamilgeziyor
+[accounts] ✓ kamilgeziyor
+[accounts] ✓ rifkigeziyor
+[accounts] 2 hesap hazır | concurrency=24
+[guild-sync] Scheduled every 6.0h
+[accounts] rifkigeziyor (654853737873014784) — 14 guild
+[accounts] kamilgeziyor (1486611756766986362) — 1 guild
+[accounts] ▶ 588711260237856793 → rifkigeziyor (654853737873014784) kuyruğuna eklendi
+[accounts] ▶ 1307528453079171122 → rifkigeziyor (654853737873014784) kuyruğuna eklendi
+[accounts] ▶ 404440555355897879 → rifkigeziyor (654853737873014784) kuyruğuna eklendi
+[accounts] ▶ 361511298451767297 → rifkigeziyor (654853737873014784) kuyruğuna eklendi
+[accounts] ▶ 1237977768722174033 → rifkigeziyor (654853737873014784) kuyruğuna eklendi
+[scraper] 588711260237856793 | cursor=1452321174385328128 | scraped=1399500 | delay=35ms
+[scraper] 1307528453079171122 | cursor=1475191373799096593 | scraped=1403600 | delay=35ms
+[scraper] 404440555355897879 | cursor=1465123425717846301 | scraped=1399100 | delay=35ms
+[scraper] 361511298451767297 | cursor=1481469765280337930 | scraped=1399300 | delay=35ms
+[scraper] 1237977768722174033 | cursor=1442992988556103781 | scraped=1399000 | delay=35ms
+[accounts] 5 kanal kuyruğa alındı
+[accounts] İsim cache: 33 mevcut, 1 yeni kanal bulunacak
+[accounts] ✓ 16 isim kaydedildi
+[guild-sync] Starting full sync for 3 accounts
+[guild-sync] Account 1486611756766986362 (idx 0): 1 guilds
+[guild-sync] Account 1486611756766986362 (idx 1): 1 guilds
+[accounts] rifkigeziyor | 588711260237856793 | 1,400,000 mesaj
+[scraper] 588711260237856793 | total=1,400,000 | delay=15ms
+[guild-sync] Account 654853737873014784 (idx 3): 14 guilds
+[guild-sync] Completed in 8.3s — 3 accounts, 15 unique guilds
+[accounts] rifkigeziyor | 361511298451767297 | 1,400,000 mesaj
+[scraper] 361511298451767297 | total=1,400,000 | delay=15ms
+[accounts] rifkigeziyor | 404440555355897879 | 1,400,000 mesaj
+[scraper] 404440555355897879 | total=1,400,000 | delay=15ms
+[accounts] rifkigeziyor | 1237977768722174033 | 1,400,000 mesaj
+[scraper] 1237977768722174033 | total=1,400,000 | delay=15ms
+[accounts] rifkigeziyor | 1307528453079171122 | 1,405,000 mesaj
+[accounts] rifkigeziyor | 588711260237856793 | 1,405,000 mesaj
+[accounts] rifkigeziyor | 361511298451767297 | 1,405,000 mesaj
+[accounts] rifkigeziyor | 404440555355897879 | 1,405,000 mesaj
+[accounts] rifkigeziyor | 1237977768722174033 | 1,405,000 mesaj
+[accounts] rifkigeziyor | 1307528453079171122 | 1,410,000 mesaj
+[scraper] 1307528453079171122 | total=1,410,000 | delay=15ms
+[accounts] rifkigeziyor | 588711260237856793 | 1,410,000 mesaj
+[scraper] 588711260237856793 | total=1,410,000 | delay=15ms
+[accounts] rifkigeziyor | 361511298451767297 | 1,410,000 mesaj
+[scraper] 361511298451767297 | total=1,410,000 | delay=15ms
+[accounts] rifkigeziyor | 404440555355897879 | 1,410,000 mesaj
+[scraper] 404440555355897879 | total=1,410,000 | delay=15ms
+[accounts] rifkigeziyor | 1237977768722174033 | 1,410,000 mesaj
+[scraper] 1237977768722174033 | total=1,410,000 | delay=15ms
+[accounts] rifkigeziyor | 1307528453079171122 | 1,415,000 mesaj
+[kafka] event=backpressure_wait topic=messages waitedMs=1 batchBytes=56388 inflightBatches=1 inflightBytes=56388
+[accounts] rifkigeziyor | 588711260237856793 | 1,415,000 mesaj
+[accounts] rifkigeziyor | 361511298451767297 | 1,415,000 mesaj
+[accounts] rifkigeziyor | 404440555355897879 | 1,415,000 mesaj
+[accounts] rifkigeziyor | 1237977768722174033 | 1,415,000 mesaj
+[accounts] rifkigeziyor | 1307528453079171122 | 1,420,000 mesaj
+[scraper] 1307528453079171122 | total=1,420,000 | delay=15ms
+[accounts] rifkigeziyor | 588711260237856793 | 1,420,000 mesaj
+[scraper] 588711260237856793 | total=1,420,000 | delay=15ms
+[accounts] rifkigeziyor | 361511298451767297 | 1,420,000 mesaj
+[scraper] 361511298451767297 | total=1,420,000 | delay=15ms
+[accounts] rifkigeziyor | 404440555355897879 | 1,420,000 mesaj
+[scraper] 404440555355897879 | total=1,420,000 | delay=15ms
+[accounts] rifkigeziyor | 1237977768722174033 | 1,420,000 mesaj
+[scraper] 1237977768722174033 | total=1,420,000 | delay=15ms
+[accounts] rifkigeziyor | 1307528453079171122 | 1,425,000 mesaj
+[accounts] rifkigeziyor | 588711260237856793 | 1,425,000 mesaj
+[accounts] rifkigeziyor | 361511298451767297 | 1,425,000 mesaj
+[accounts] rifkigeziyor | 404440555355897879 | 1,425,000 mesaj
+[accounts] rifkigeziyor | 1237977768722174033 | 1,425,000 mesaj
+[accounts] rifkigeziyor | 1307528453079171122 | 1,430,000 mesaj
+[scraper] 1307528453079171122 | total=1,430,000 | delay=15ms
+[accounts] rifkigeziyor | 588711260237856793 | 1,430,000 mesaj
+[scraper] 588711260237856793 | total=1,430,000 | delay=15ms
+[accounts] rifkigeziyor | 361511298451767297 | 1,430,000 mesaj
+[scraper] 361511298451767297 | total=1,430,000 | delay=15ms
+[accounts] rifkigeziyor | 404440555355897879 | 1,430,000 mesaj
+[scraper] 404440555355897879 | total=1,430,000 | delay=15ms
+[accounts] rifkigeziyor | 1237977768722174033 | 1,430,000 mesaj
+[scraper] 1237977768722174033 | total=1,430,000 | delay=15ms
+[accounts] rifkigeziyor | 1307528453079171122 | 1,435,000 mesaj
+[accounts] rifkigeziyor | 588711260237856793 | 1,435,000 mesaj
+[accounts] rifkigeziyor | 361511298451767297 | 1,435,000 mesaj
+[accounts] rifkigeziyor | 404440555355897879 | 1,435,000 mesaj
+[accounts] rifkigeziyor | 1237977768722174033 | 1,435,000 mesaj
+[accounts] rifkigeziyor | 1307528453079171122 | 1,440,000 mesaj
+[scraper] 1307528453079171122 | total=1,440,000 | delay=15ms
+[kafka] event=backpressure_wait topic=messages waitedMs=1 batchBytes=54333 inflightBatches=1 inflightBytes=54333
+[accounts] rifkigeziyor | 588711260237856793 | 1,440,000 mesaj
+[scraper] 588711260237856793 | total=1,440,000 | delay=15ms
+[accounts] rifkigeziyor | 361511298451767297 | 1,440,000 mesaj
+[scraper] 361511298451767297 | total=1,440,000 | delay=15ms
+[accounts] rifkigeziyor | 404440555355897879 | 1,440,000 mesaj
+[scraper] 404440555355897879 | total=1,440,000 | delay=15ms
+[accounts] rifkigeziyor | 1237977768722174033 | 1,440,000 mesaj
+[scraper] 1237977768722174033 | total=1,440,000 | delay=15ms
+[accounts] rifkigeziyor | 1307528453079171122 | 1,445,000 mesaj
+[accounts] rifkigeziyor | 588711260237856793 | 1,445,000 mesaj
+[accounts] rifkigeziyor | 361511298451767297 | 1,445,000 mesaj
+[accounts] rifkigeziyor | 404440555355897879 | 1,445,000 mesaj
+[accounts] rifkigeziyor | 1237977768722174033 | 1,445,000 mesaj
+[accounts] rifkigeziyor | 1307528453079171122 | 1,450,000 mesaj
+[scraper] 1307528453079171122 | total=1,450,000 | delay=15ms
+[accounts] rifkigeziyor | 588711260237856793 | 1,450,000 mesaj
+[scraper] 588711260237856793 | total=1,450,000 | delay=15ms
+[accounts] rifkigeziyor | 361511298451767297 | 1,450,000 mesaj
+[scraper] 361511298451767297 | total=1,450,000 | delay=15ms
+[accounts] rifkigeziyor | 404440555355897879 | 1,450,000 mesaj
+[scraper] 404440555355897879 | total=1,450,000 | delay=15ms
+[accounts] rifkigeziyor | 1237977768722174033 | 1,450,000 mesaj
+[scraper] 1237977768722174033 | total=1,450,000 | delay=15ms
+[accounts] rifkigeziyor | 1307528453079171122 | 1,455,000 mesaj
+[accounts] rifkigeziyor | 588711260237856793 | 1,455,000 mesaj
+[accounts] rifkigeziyor | 361511298451767297 | 1,455,000 mesaj
+[accounts] rifkigeziyor | 404440555355897879 | 1,455,000 mesaj
+[accounts] rifkigeziyor | 1237977768722174033 | 1,455,000 mesaj
+[accounts] rifkigeziyor | 1307528453079171122 | 1,460,000 mesaj
+[scraper] 1307528453079171122 | total=1,460,000 | delay=15ms
+[accounts] rifkigeziyor | 588711260237856793 | 1,460,000 mesaj
+[scraper] 588711260237856793 | total=1,460,000 | delay=15ms
+[accounts] rifkigeziyor | 361511298451767297 | 1,460,000 mesaj
+[scraper] 361511298451767297 | total=1,460,000 | delay=15ms
+[accounts] rifkigeziyor | 404440555355897879 | 1,460,000 mesaj
+[scraper] 404440555355897879 | total=1,460,000 | delay=15ms
+[accounts] rifkigeziyor | 1237977768722174033 | 1,460,000 mesaj
+[scraper] 1237977768722174033 | total=1,460,000 | delay=15ms
+[accounts] rifkigeziyor | 1307528453079171122 | 1,465,000 mesaj
+[accounts] rifkigeziyor | 588711260237856793 | 1,465,000 mesaj
+[accounts] rifkigeziyor | 361511298451767297 | 1,465,000 mesaj
+[accounts] rifkigeziyor | 404440555355897879 | 1,465,000 mesaj
+[accounts] rifkigeziyor | 1237977768722174033 | 1,465,000 mesaj
+[accounts] rifkigeziyor | 1307528453079171122 | 1,470,000 mesaj
+[scraper] 1307528453079171122 | total=1,470,000 | delay=15ms
+[accounts] rifkigeziyor | 588711260237856793 | 1,470,000 mesaj
+[scraper] 588711260237856793 | total=1,470,000 | delay=15ms
+[accounts] rifkigeziyor | 361511298451767297 | 1,470,000 mesaj
+[scraper] 361511298451767297 | total=1,470,000 | delay=15ms
+[accounts] rifkigeziyor | 404440555355897879 | 1,470,000 mesaj
+[scraper] 404440555355897879 | total=1,470,000 | delay=15ms
+[accounts] rifkigeziyor | 1237977768722174033 | 1,470,000 mesaj
+[scraper] 1237977768722174033 | total=1,470,000 | delay=15ms
+[accounts] rifkigeziyor | 1307528453079171122 | 1,475,000 mesaj

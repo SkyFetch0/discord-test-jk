@@ -1,0 +1,20 @@
+{
+  "generated_at_utc": "2026-03-21T22:22:50.509096+00:00",
+  "project_root": "/root/Project-Senneo",
+  "manifest": "FILE_MANIFEST.jsonl",
+  "content_chunks_dir": "content_chunks",
+  "content_chunk_files": [
+    "content_0000.txt"
+  ],
+  "stats": {
+    "total_files": 8562,
+    "content_embedded_files": 176,
+    "content_skipped_binary": 0,
+    "content_skipped_size": 0,
+    "content_skipped_node_modules": 8386
+  },
+  "notes": {
+    "manifest": "Her dosya için bir satır; hiçbir yol atlanmaz.",
+    "content": "node_modules ve 2MiB üzeri / ikili dosyalar manifestte kalır, metin gövde content_chunks içindedir."
+  }
+}

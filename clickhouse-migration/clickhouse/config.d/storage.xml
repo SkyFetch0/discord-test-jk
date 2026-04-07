@@ -1,0 +1,64 @@
+<!-- ─────────────────────────────────────────────────────────────────────────
+     storage.xml — Senneo ClickHouse Depolama Politikası
+     Varsayılan: tek disk (default).
+     Opsiyonel: SSD+HDD tiered storage — aşağıdaki bloğu uncomment ederek etkinleştir.
+     ───────────────────────────────────────────────────────────────────────── -->
+<clickhouse>
+
+    <!--
+    ═══════════════════════════════════════════════════════════════
+    OPSİYONEL: Tiered Storage (SSD + HDD)
+    ═══════════════════════════════════════════════════════════════
+    Etkinleştirmek için:
+      1. Aşağıdaki bloğun comment'ini kaldır
+      2. Docker volume'ları NVMe ve HDD mount point'lerine bağla:
+           volumes:
+             - /mnt/nvme0/clickhouse:/var/lib/clickhouse/hot
+             - /mnt/hdd0/clickhouse:/var/lib/clickhouse/cold
+      3. messages tablosu için: SETTINGS storage_policy = 'tiered'
+
+    <storage_configuration>
+        <disks>
+            <hot>
+                <path>/var/lib/clickhouse/hot/</path>
+            </hot>
+            <cold>
+                <path>/var/lib/clickhouse/cold/</path>
+            </cold>
+        </disks>
+        <policies>
+            <tiered>
+                <volumes>
+                    <hot_volume>
+                        <disk>hot</disk>
+                        <max_data_part_size_bytes>5368709120</max_data_part_size_bytes>
+                    </hot_volume>
+                    <cold_volume>
+                        <disk>cold</disk>
+                    </cold_volume>
+                </volumes>
+                <move_factor>0.1</move_factor>
+            </tiered>
+        </policies>
+    </storage_configuration>
+    -->
+
+    <!-- Varsayılan tek disk yapılandırması (tiered kapalıyken geçerli) -->
+    <storage_configuration>
+        <disks>
+            <default>
+                <path>/var/lib/clickhouse/</path>
+            </default>
+        </disks>
+        <policies>
+            <default>
+                <volumes>
+                    <main>
+                        <disk>default</disk>
+                    </main>
+                </volumes>
+            </default>
+        </policies>
+    </storage_configuration>
+
+</clickhouse>

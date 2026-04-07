@@ -1,0 +1,14 @@
+<clickhouse>
+    <profiles>
+        <default>
+            <!-- Max memory per query: 3GB (prevents OOM on OPTIMIZE TABLE FINAL) -->
+            <max_memory_usage>3221225472</max_memory_usage>
+            <!-- Spill GROUP BY aggregation to disk when memory exceeds 2GB -->
+            <max_bytes_before_external_group_by>2147483648</max_bytes_before_external_group_by>
+            <!-- Spill ORDER BY sort to disk when memory exceeds 2GB -->
+            <max_bytes_before_external_sort>2147483648</max_bytes_before_external_sort>
+            <!-- Allow spilling to disk instead of crashing -->
+            <prefer_localhost_replica>1</prefer_localhost_replica>
+        </default>
+    </profiles>
+</clickhouse>

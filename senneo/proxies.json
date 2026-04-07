@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "strictMode": false,
+  "rotationMode": "weighted",
+  "healthCheckMs": 30000,
+  "failThreshold": 4,
+  "cooldownMs": 60000,
+  "proxies": []
+}

@@ -1,0 +1,9 @@
+{
+  "msgsProcessed": 75400,
+  "msgsFailedDlq": 0,
+  "batchesFlushed": 748,
+  "scyllaErrors": 0,
+  "chErrors": 0,
+  "startedAt": "2026-03-21T03:28:22.045Z",
+  "updatedAt": "2026-03-21T03:35:52.952Z"
+}

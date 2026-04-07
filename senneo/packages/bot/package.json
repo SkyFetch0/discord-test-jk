@@ -1,0 +1,17 @@
+{
+  "name": "@senneo/bot",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b -w & node --watch dist/index.js",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@senneo/shared": "*",
+    "discord.js-selfbot-v13": "^3.1.6",
+    "dotenv": "^16.3.1",
+    "kafkajs": "^2.2.4"
+  }
+}

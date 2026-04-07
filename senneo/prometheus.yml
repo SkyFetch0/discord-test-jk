@@ -1,0 +1,24 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+
+scrape_configs:
+
+  - job_name: 'scylladb'
+    static_configs:
+      - targets: ['senneo-scylla:9180']
+    metrics_path: /metrics
+
+  - job_name: 'clickhouse'
+    static_configs:
+      - targets: ['senneo-clickhouse:9363']
+    metrics_path: /metrics
+
+  - job_name: 'redpanda'
+    static_configs:
+      - targets: ['senneo-redpanda:9644']
+    metrics_path: /metrics/prometheus
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

@@ -1,0 +1,9 @@
+{
+  "name": "project-senneo-root",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Kök — bağımlılıklar senneo/ ve senneo-dashboard/. Calistir: make install veya npm run install:deps",
+  "scripts": {
+    "install:deps": "npm install --prefix senneo && npm install --prefix senneo-dashboard"
+  }
+}

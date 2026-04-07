@@ -1,0 +1,128 @@
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │  DEV COMPOSE — single-node everything.                             │
+# │  See ARCHITECTURE_SCALING_PLAN.md for production cluster topology: │
+# │    Scylla:   6 node, RF=3, NetworkTopologyStrategy, NVMe           │
+# │    CH:       3 shard × 2 replica, ReplicatedMergeTree              │
+# │    Redpanda: 3 node, 256 partition, RF=3, lz4                      │
+# │  Do NOT use this compose file in production as-is.                 │
+# └─────────────────────────────────────────────────────────────────────┘
+version: '3.8'
+
+services:
+  scylla:
+    image: scylladb/scylla:5.4
+    container_name: senneo-scylla
+    ports:
+      - "9042:9042"
+      - "9180:9180"
+    volumes:
+      - scylla_data:/var/lib/scylla
+    # --smp 1 → single core (dev). In prod: remove this, let Scylla use all cores.
+    # commitlog is ON by default (durable_writes). Do NOT add --developer-mode.
+    command: >
+      --smp 1
+      --memory 1G
+      --overprovisioned 1
+      --prometheus-address 0.0.0.0
+    networks:
+      - senneo-net
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: senneo-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+      - "9363:9363"
+    environment:
+      CLICKHOUSE_METRICS_PORT: 9363
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./config/clickhouse-memory.xml:/etc/clickhouse-server/users.d/memory.xml:ro
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - senneo-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.2.21
+    container_name: senneo-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --memory 1G
+      - --overprovisioned
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    networks:
+      - senneo-net
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: senneo-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    networks:
+      - senneo-net
+    depends_on:
+      - scylla
+      - clickhouse
+      - redpanda
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: senneo-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - senneo-net
+    depends_on:
+      - prometheus
+
+volumes:
+  scylla_data:
+  clickhouse_data:
+  redpanda_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  senneo-net:
+    driver: bridge

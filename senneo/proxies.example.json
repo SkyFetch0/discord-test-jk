@@ -1,0 +1,26 @@
+{
+  "enabled": true,
+  "strictMode": true,
+  "rotationMode": "weighted",
+  "healthCheckMs": 30000,
+  "failThreshold": 3,
+  "cooldownMs": 60000,
+  "proxies": [
+    {
+      "label": "Premium SOCKS US-1",
+      "url": "socks5://user1:pass1@proxy1.example.com:1080",
+      "region": "us",
+      "maxConns": 50,
+      "weight": 5,
+      "enabled": true
+    },
+    {
+      "label": "Premium HTTPS EU-1",
+      "url": "http://user2:pass2@proxy2.example.com:8080",
+      "region": "eu",
+      "maxConns": 50,
+      "weight": 5,
+      "enabled": true
+    }
+  ]
+}

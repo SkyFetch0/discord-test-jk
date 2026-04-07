@@ -1,0 +1,53 @@
+<!-- ─────────────────────────────────────────────────────────────────────────
+     logging.xml — Senneo ClickHouse Log Yapılandırması
+     ───────────────────────────────────────────────────────────────────────── -->
+<clickhouse>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         Sunucu Log'u
+         ═══════════════════════════════════════════════════════════════ -->
+    <logger>
+        <!-- 'information' production için yeterlidir.
+             Sorun ayıklarken 'debug' veya 'trace' kullan. -->
+        <level>information</level>
+        <log>/var/log/clickhouse-server/clickhouse-server.log</log>
+        <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
+        <!-- Her dosya max 500 MB, son 5 dosya saklanır → max 2.5 GB log -->
+        <size>500M</size>
+        <count>5</count>
+    </logger>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         Query Log — Performans analizi ve yavaş sorgu tespiti
+         ═══════════════════════════════════════════════════════════════ -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <!-- 30 günlük sorgu geçmişi tut -->
+        <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
+    </query_log>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         Part Log — Merge sağlığı ve part birleşim takibi
+         ═══════════════════════════════════════════════════════════════ -->
+    <part_log>
+        <database>system</database>
+        <table>part_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <!-- 14 günlük part geçmişi yeterli -->
+        <ttl>event_date + INTERVAL 14 DAY DELETE</ttl>
+    </part_log>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         Async Insert Log — Buffer flush takibi
+         ═══════════════════════════════════════════════════════════════ -->
+    <asynchronous_insert_log>
+        <database>system</database>
+        <table>asynchronous_insert_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </asynchronous_insert_log>
+
+</clickhouse>

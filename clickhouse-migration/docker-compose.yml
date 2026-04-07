@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Senneo — ClickHouse Tek-Node Kurulum
+# Hedef: 500B mesaj, 200K msg/s ingest, analitik sorgular
+#
+# PRODUCTION NOTLARI:
+#   - Replica eklemek için interserver portu (9009) hazır
+#   - volumes NVMe SSD'ye bağlanabilir (storage.xml'deki tiered policy ile)
+#   - CH_PASSWORD mutlaka .env dosyasından gelmelidir
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: '3.8'
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: senneo-clickhouse
+    hostname: senneo-ch-01
+    restart: unless-stopped
+
+    ports:
+      - "8123:8123"   # HTTP interface  (API, ingester, dashboard)
+      - "9000:9000"   # Native TCP      (performanslı client bağlantısı)
+      - "9009:9009"   # Interserver     (ilerideki replica için hazır)
+
+    volumes:
+      # ── Veri ve log dizinleri ──────────────────────────────────────────────
+      - ch_data:/var/lib/clickhouse
+      - ch_logs:/var/log/clickhouse-server
+
+      # ── Sunucu yapılandırması ──────────────────────────────────────────────
+      - ./clickhouse/config.d/performance.xml:/etc/clickhouse-server/config.d/performance.xml:ro
+      - ./clickhouse/config.d/compression.xml:/etc/clickhouse-server/config.d/compression.xml:ro
+      - ./clickhouse/config.d/logging.xml:/etc/clickhouse-server/config.d/logging.xml:ro
+      - ./clickhouse/config.d/storage.xml:/etc/clickhouse-server/config.d/storage.xml:ro
+
+      # ── Kullanıcı/profil yapılandırması ───────────────────────────────────
+      - ./clickhouse/users.d/default.xml:/etc/clickhouse-server/users.d/default.xml:ro
+
+      # ── İlk başlatmada çalışan SQL scriptler ──────────────────────────────
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+
+    environment:
+      CLICKHOUSE_DB: senneo_messages
+      CLICKHOUSE_USER: senneo_ingester
+      CLICKHOUSE_PASSWORD: "${CH_INGESTER_PASSWORD}"
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+      memlock:
+        soft: -1
+        hard: -1
+
+    # RAM'in ~%80'ini ClickHouse'a ver (sunucuya göre ayarla)
+    deploy:
+      resources:
+        limits:
+          memory: 32G
+        reservations:
+          memory: 16G
+
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --host localhost --port 9000 --query 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    networks:
+      - senneo-internal
+
+volumes:
+  ch_data:
+    driver: local
+    # NVMe SSD'ye bind mount etmek için:
+    # driver_opts:
+    #   type: none
+    #   device: /mnt/nvme0/clickhouse/data
+    #   o: bind
+  ch_logs:
+    driver: local
+
+networks:
+  senneo-internal:
+    driver: bridge

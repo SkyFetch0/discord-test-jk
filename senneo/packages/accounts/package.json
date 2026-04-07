@@ -1,0 +1,20 @@
+{
+  "name": "@senneo/accounts",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b -w & node --watch dist/index.js",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@senneo/shared": "*",
+    "discord.js-selfbot-v13": "^3.1.6",
+    "dotenv": "^16.3.1",
+    "https-proxy-agent": "^7.0.6",
+    "kafkajs": "^2.2.4",
+    "p-queue": "^7.4.1",
+    "socks-proxy-agent": "^9.0.0"
+  }
+}
