@@ -2,7 +2,8 @@ import { Client as CassandraClient } from 'cassandra-driver';
 import { ClickHouseClient } from '@clickhouse/client';
 
 const KEYSPACE = process.env.SCYLLA_KEYSPACE ?? 'senneo';
-const CH_DB    = process.env.CLICKHOUSE_DB   ?? 'senneo';
+const CH_USR_DB = process.env.CLICKHOUSE_USR_DB ?? 'senneo_users';
+const CH_MSG_DB = process.env.CLICKHOUSE_MSG_DB ?? 'senneo_messages';
 const NAME_IN_CHUNK = 200;
 
 /**
@@ -71,7 +72,7 @@ async function fetchUserProfiles(
     try {
       const result = await ch.query({
         query: `SELECT author_id, author_avatar, display_name, is_bot
-                FROM ${CH_DB}.users_latest FINAL
+                FROM ${CH_USR_DB}.users_latest FINAL
                 WHERE author_id IN (${placeholders})`,
         query_params: params,
         format: 'JSONEachRow',
@@ -105,7 +106,7 @@ async function fetchUserProfiles(
           query: `SELECT author_id,
                          argMaxIf(author_avatar, ts, author_avatar != '' AND author_avatar != '0') AS best_avatar,
                          argMax(display_name, ts) AS best_display_name
-                  FROM ${CH_DB}.messages
+                  FROM ${CH_MSG_DB}.messages
                   WHERE author_id IN (${placeholders})
                   GROUP BY author_id`,
           query_params: params,

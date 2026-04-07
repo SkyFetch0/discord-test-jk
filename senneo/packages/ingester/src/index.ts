@@ -2,10 +2,8 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { Kafka, Consumer, EachBatchPayload } from 'kafkajs';
-import { Client as CassandraClient } from 'cassandra-driver';
 import { ClickHouseClient } from '@clickhouse/client';
 import { RawMessage } from '@senneo/shared';
-import { createScyllaClient, writeMessages as scyllaWrite } from './scylla';
 import { createClickHouseClient, writeMessages as clickhouseWrite } from './clickhouse';
 
 function envPositiveInt(name: string, defaultValue: number): number {
@@ -37,7 +35,7 @@ function logSampled(key: string, level: 'error' | 'warn', ...args: unknown[]): v
 }
 
 // ── Error log reporter (writes to CH error_log, sampled to prevent flood) ────
-const CH_DB_NAME = process.env.CLICKHOUSE_DB ?? 'senneo';
+const CH_DB_NAME = process.env.CLICKHOUSE_DB ?? 'senneo_operations';
 const _lastErrorLogTs: Record<string, number> = {};
 function reportError(
   ch: ClickHouseClient, category: string, severity: string, message: string, err?: unknown,
@@ -59,7 +57,6 @@ const metrics = {
   msgsProcessed:  0,
   msgsFailedDlq:  0,
   batchesFlushed: 0,
-  scyllaErrors:   0,
   chErrors:       0,
   startedAt:      new Date().toISOString(),
 };
@@ -92,36 +89,23 @@ async function connectWithRetry<T>(
 }
 
 // ── Batch flush — commit-after-durable-write semantics ──────────────────────
-// Scylla is source of truth: if Scylla write fails, this function THROWS
-// so the caller does NOT commit the Kafka offset → at-least-once delivery.
-// CH is analytics-only: failure is logged but non-blocking.
+// ClickHouse is now the PRIMARY (and only) message store.
+// If CH write fails, this function THROWS so the caller does NOT commit
+// the Kafka offset → at-least-once delivery is preserved.
 async function flushBatch(
-  scylla:     CassandraClient,
   clickhouse: ClickHouseClient,
   messages:   RawMessage[],
 ): Promise<void> {
   if (messages.length === 0) return;
   const start = Date.now();
 
-  // Fire both writes in parallel, await BOTH fully (no timeout race)
-  const [scyllaResult, chResult] = await Promise.allSettled([
-    scyllaWrite(scylla, messages),
-    clickhouseWrite(clickhouse, messages),
-  ]);
-
-  // Scylla failure = THROW — caller must NOT commit offset
-  if (scyllaResult.status === 'rejected') {
-    metrics.scyllaErrors++;
-    logSampled('scylla-write', 'error', `[ingester] ScyllaDB write FAILED (${metrics.scyllaErrors} total) — offset NOT committed:`, scyllaResult.reason);
-    reportError(clickhouse, 'scylla_write', 'error', `ScyllaDB write failed (${metrics.scyllaErrors} total)`, scyllaResult.reason);
-    throw scyllaResult.reason;
-  }
-
-  // CH failure is non-fatal (analytics store), but log for visibility
-  if (chResult.status === 'rejected') {
+  try {
+    await clickhouseWrite(clickhouse, messages);
+  } catch (err) {
     metrics.chErrors++;
-    logSampled('ch-write', 'error', `[ingester] ClickHouse write error (${metrics.chErrors} total, non-fatal):`, chResult.reason);
-    reportError(clickhouse, 'clickhouse_write', 'warn', `ClickHouse write error (${metrics.chErrors} total, non-fatal)`, chResult.reason);
+    logSampled('ch-write', 'error', `[ingester] ClickHouse write FAILED (${metrics.chErrors} total) — offset NOT committed:`, err);
+    reportError(clickhouse, 'clickhouse_write', 'error', `ClickHouse write failed (${metrics.chErrors} total)`, err);
+    throw err; // propagate — caller must NOT commit offset
   }
 
   metrics.msgsProcessed += messages.length;
@@ -134,14 +118,11 @@ async function flushBatch(
 }
 
 async function run(): Promise<void> {
-  console.log('[ingester] Waiting for databases...');
+  console.log('[ingester] Waiting for ClickHouse...');
 
-  const [scylla, clickhouse] = await Promise.all([
-    connectWithRetry('ScyllaDB',   createScyllaClient),
-    connectWithRetry('ClickHouse', createClickHouseClient),
-  ]);
+  const clickhouse = await connectWithRetry('ClickHouse', createClickHouseClient);
 
-  console.log('[ingester] Both databases ready — connecting to Kafka...');
+  console.log('[ingester] ClickHouse ready — connecting to Kafka...');
 
   const kafka = new Kafka({
     clientId: 'senneo-ingester',
@@ -258,8 +239,8 @@ async function run(): Promise<void> {
           const subBatch  = messages.splice(0, BATCH_FLUSH_SIZE);
           const subOffset = offsets.splice(0, BATCH_FLUSH_SIZE);
 
-          // flushBatch throws on Scylla failure → offset NOT committed → at-least-once
-          await flushBatch(scylla, clickhouse, subBatch);
+          // flushBatch throws on CH failure → offset NOT committed → at-least-once
+          await flushBatch(clickhouse, subBatch);
 
           // Only resolve after durable write succeeds
           resolveOffset(subOffset[subOffset.length - 1]);
@@ -270,7 +251,7 @@ async function run(): Promise<void> {
 
       // Flush remaining messages
       if (messages.length > 0) {
-        await flushBatch(scylla, clickhouse, messages);
+        await flushBatch(clickhouse, messages);
         resolveOffset(offsets[offsets.length - 1]);
       } else if (lastDlqOffset) {
         // If only DLQ messages remained, resolve up to last DLQ offset
@@ -293,7 +274,6 @@ async function run(): Promise<void> {
     flushMetrics();
     await consumer.disconnect();
     await dlqProducer.disconnect();
-    await scylla.shutdown();
     console.log('[ingester] Stopped');
     process.exit(0);
   };

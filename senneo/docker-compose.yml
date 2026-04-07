@@ -1,92 +1,200 @@
-# ┌─────────────────────────────────────────────────────────────────────┐
-# │  DEV COMPOSE — single-node everything.                             │
-# │  See ARCHITECTURE_SCALING_PLAN.md for production cluster topology: │
-# │    Scylla:   6 node, RF=3, NetworkTopologyStrategy, NVMe           │
-# │    CH:       3 shard × 2 replica, ReplicatedMergeTree              │
-# │    Redpanda: 3 node, 256 partition, RF=3, lz4                      │
-# │  Do NOT use this compose file in production as-is.                 │
-# └─────────────────────────────────────────────────────────────────────┘
-version: '3.8'
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │  SENNEO — Full Stack Docker Compose                                         │
+# │  Tek komutla tüm sistemi ayağa kaldırır:                                   │
+# │    docker compose up -d                                                     │
+# │                                                                              │
+# │  Servisler:                                                                  │
+# │    ClickHouse  — Primary mesaj store (projections + analytics)              │
+# │    ScyllaDB    — Operasyonel tablolar (scrape, auth, guild management)      │
+# │    Redpanda    — Kafka-compatible event streaming                           │
+# │    Prometheus  — Metrics collection                                          │
+# │    Grafana     — Dashboard & visualization                                   │
+# │                                                                              │
+# │  Otomatik Schema:                                                            │
+# │    ClickHouse → /docker-entrypoint-initdb.d/*.sql (8 dosya)                │
+# │    ScyllaDB   → init-scylla sidecar container (init.cql otomatik çalışır)  │
+# │                                                                              │
+# │  Production için:                                                            │
+# │    CH:       3 shard × 2 replica, ReplicatedMergeTree                       │
+# │    Redpanda: 3 node, 256 partition, RF=3, lz4                               │
+# │    Scylla:   3 node cluster, RF=3, NetworkTopologyStrategy                  │
+# └──────────────────────────────────────────────────────────────────────────────┘
 
 services:
-  scylla:
-    image: scylladb/scylla:5.4
-    container_name: senneo-scylla
-    ports:
-      - "9042:9042"
-      - "9180:9180"
-    volumes:
-      - scylla_data:/var/lib/scylla
-    # --smp 1 → single core (dev). In prod: remove this, let Scylla use all cores.
-    # commitlog is ON by default (durable_writes). Do NOT add --developer-mode.
-    command: >
-      --smp 1
-      --memory 1G
-      --overprovisioned 1
-      --prometheus-address 0.0.0.0
-    networks:
-      - senneo-net
-    healthcheck:
-      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
 
+  # ════════════════════════════════════════════════════════════════════════════
+  # ClickHouse — Primary Message Store + Analytics
+  # ════════════════════════════════════════════════════════════════════════════
+  # Replaces ScyllaDB message tables (messages_by_id, messages_by_channel_bucket,
+  # messages_by_author) with single table + 3 projections.
+  # 4 databases: senneo_messages, senneo_users, senneo_analytics, senneo_operations
   clickhouse:
-    image: clickhouse/clickhouse-server:23.8
+    image: clickhouse/clickhouse-server:24.8-alpine
     container_name: senneo-clickhouse
-    ports:
-      - "8123:8123"
-      - "9000:9000"
-      - "9363:9363"
-    environment:
-      CLICKHOUSE_METRICS_PORT: 9363
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse
-      - ./config/clickhouse-memory.xml:/etc/clickhouse-server/users.d/memory.xml:ro
+    hostname: senneo-ch-01
     restart: unless-stopped
+    ports:
+      - "${CH_HTTP_PORT:-8123}:8123"     # HTTP interface (API, ingester, dashboard)
+      - "${CH_NATIVE_PORT:-9000}:9000"   # Native TCP (performanslı client)
+      - "9009:9009"                       # Interserver (ilerideki replica için)
+      - "9363:9363"                       # Prometheus metrics
+    volumes:
+      # ── Veri ve log ────────────────────────────────────────────────────────
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      # ── Sunucu yapılandırması ──────────────────────────────────────────────
+      - ./config/clickhouse/config.d/performance.xml:/etc/clickhouse-server/config.d/performance.xml:ro
+      - ./config/clickhouse/config.d/compression.xml:/etc/clickhouse-server/config.d/compression.xml:ro
+      - ./config/clickhouse/config.d/logging.xml:/etc/clickhouse-server/config.d/logging.xml:ro
+      - ./config/clickhouse/config.d/storage.xml:/etc/clickhouse-server/config.d/storage.xml:ro
+      # ── Kullanıcı yapılandırması ───────────────────────────────────────────
+      - ./config/clickhouse/users.d/default.xml:/etc/clickhouse-server/users.d/default.xml:ro
+      # ── Init SQL (otomatik çalışır — sıralı: 001→008) ─────────────────────
+      - ./config/clickhouse/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      CLICKHOUSE_DB: senneo_messages
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ulimits:
       nofile:
         soft: 262144
         hard: 262144
+      memlock:
+        soft: -1
+        hard: -1
     networks:
       - senneo-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' 2>/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
+  # ════════════════════════════════════════════════════════════════════════════
+  # ScyllaDB — Operational State Only
+  # ════════════════════════════════════════════════════════════════════════════
+  # Stores: scrape_targets, checkpoints, stats, name_cache, auth, guild mgmt,
+  #         invite_pool, categories, archived_accounts, alert_rules
+  # Does NOT store messages (migrated to ClickHouse).
+  scylla:
+    image: scylladb/scylla:5.4
+    container_name: senneo-scylla
+    restart: unless-stopped
+    ports:
+      - "${SCYLLA_CQL_PORT:-9042}:9042"  # CQL native transport
+      - "9180:9180"                        # Prometheus metrics
+    volumes:
+      - scylla_data:/var/lib/scylla
+      - ./config/scylladb/init.cql:/etc/scylla/init.cql:ro
+      - ./config/scylladb/init-scylla.sh:/etc/scylla/init-scylla.sh:ro
+    entrypoint: ["/bin/bash", "/etc/scylla/init-scylla.sh"]
+    command:
+      - --smp
+      - "2"
+      - --memory
+      - 2G
+      - --overprovisioned
+      - "1"
+      - --developer-mode
+      - "1"
+      - --prometheus-address
+      - 0.0.0.0
+      - --batch-size-fail-threshold
+      - "1000000"
+      - --batch-size-warn-threshold
+      - "500000"
+    networks:
+      - senneo-net
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES' 2>/dev/null | grep -q senneo || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Redpanda — Kafka-Compatible Event Streaming
+  # ════════════════════════════════════════════════════════════════════════════
+  # Single-node dev setup. Scraper → Kafka → Ingester → ClickHouse.
+  # Auto-creates topics via rpk on startup.
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v23.2.21
     container_name: senneo-redpanda
+    restart: unless-stopped
     command:
       - redpanda
       - start
-      - --smp 1
-      - --memory 1G
+      - --smp
+      - "1"
+      - --memory
+      - 1G
       - --overprovisioned
-      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
-      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+      - --pandaproxy-addr
+      - 0.0.0.0:8082
+      - --advertise-pandaproxy-addr
+      - localhost:8082
     ports:
-      - "9092:9092"
-      - "9644:9644"
+      - "${KAFKA_PORT:-9092}:9092"        # Kafka API (external)
+      - "29092:29092"                      # Kafka API (internal/docker)
+      - "8082:8082"                        # HTTP Proxy (REST API)
+      - "9644:9644"                        # Admin API + Prometheus metrics
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     networks:
       - senneo-net
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health || exit 1"]
-      interval: 15s
+      test: ["CMD-SHELL", "rpk cluster health 2>/dev/null || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 20s
 
+  # ── Redpanda Topic Init — Kafka topic'lerini otomatik oluşturur ────────────
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.2.21
+    container_name: senneo-redpanda-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "[redpanda-init] Creating topics..."
+        rpk topic create messages \
+          --brokers redpanda:29092 \
+          --partitions 16 \
+          --replicas 1 \
+          --config retention.ms=604800000 \
+          --config retention.bytes=107374182400 \
+          --config compression.type=lz4 \
+          --config max.message.bytes=10485760 \
+          2>/dev/null || true
+        rpk topic create messages.dlq \
+          --brokers redpanda:29092 \
+          --partitions 1 \
+          --replicas 1 \
+          --config retention.ms=2592000000 \
+          2>/dev/null || true
+        echo "[redpanda-init] Topics ready:"
+        rpk topic list --brokers redpanda:29092
+    networks:
+      - senneo-net
+    restart: "no"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Prometheus — Metrics Collection
+  # ════════════════════════════════════════════════════════════════════════════
   prometheus:
     image: prom/prometheus:latest
     container_name: senneo-prometheus
+    restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -94,35 +202,59 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
     networks:
       - senneo-net
     depends_on:
-      - scylla
-      - clickhouse
-      - redpanda
+      clickhouse:
+        condition: service_healthy
+      scylla:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
 
+  # ════════════════════════════════════════════════════════════════════════════
+  # Grafana — Dashboard & Visualization
+  # ════════════════════════════════════════════════════════════════════════════
   grafana:
     image: grafana/grafana:latest
     container_name: senneo-grafana
+    restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${GRAFANA_PORT:-3000}:3000"
     volumes:
       - grafana_data:/var/lib/grafana
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
     networks:
       - senneo-net
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_started
 
+# ════════════════════════════════════════════════════════════════════════════════
+# Named Volumes — Persist data across restarts
+# ════════════════════════════════════════════════════════════════════════════════
 volumes:
-  scylla_data:
   clickhouse_data:
+    name: senneo-clickhouse-data
+  clickhouse_logs:
+    name: senneo-clickhouse-logs
+  scylla_data:
+    name: senneo-scylla-data
   redpanda_data:
+    name: senneo-redpanda-data
   prometheus_data:
+    name: senneo-prometheus-data
   grafana_data:
+    name: senneo-grafana-data
 
+# ════════════════════════════════════════════════════════════════════════════════
+# Network — All services on same bridge network
+# ════════════════════════════════════════════════════════════════════════════════
 networks:
   senneo-net:
+    name: senneo-net
     driver: bridge

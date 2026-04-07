@@ -1,239 +1,231 @@
-# Senneo
+# Senneo — Discord Message Archive & Analytics Platform
 
-Discord message scraping + analytics platform.
+Yüksek hacimli Discord mesaj arşivleme ve analiz platformu.
 
-## Architecture
+## 🚀 Hızlı Başlangıç
 
-```
-Discord API
-    │  (selfbot, ~100 msg/s per channel, max 5 concurrent)
-    ▼
-accounts package  ──────────────────►  Redpanda (Kafka)
-                                            │
-                                            ▼
-                                      ingester package
-                                       ├──► ScyllaDB         (fast reads, cursor scroll)
-                                       └──► ClickHouse        (analytics, badge directory)
-                                            │
-                                            ▼
-                                        api package          (REST, port 4000)
-```
+### Gereksinimler
+- Docker & Docker Compose
+- Node.js 18+ (backend geliştirme için)
+- 8GB RAM minimum (16GB önerilen)
 
-### Database split
+### 1. Kurulum
 
-| Use case | Database |
-|---|---|
-| Point lookup by message ID | ScyllaDB `messages_by_id` |
-| Channel scroll (upward pagination) | ScyllaDB `messages_by_channel_bucket` |
-| Analytics, date-range queries | ClickHouse `messages` |
-| Badge directory (bitAnd filter) | ClickHouse `users_latest` |
-
-## Quick Start
-
-### 1. Start infrastructure
 ```bash
+# Depoyu klonla
+git clone <repo-url>
+cd senneo
+
+# Ortam değişkenlerini ayarla
+cp .env.example .env
+# .env dosyasını düzenle (JWT_SECRET, ADMIN_PASSWORD vb.)
+
+# Tüm servisleri başlat (ClickHouse, ScyllaDB, Kafka, Prometheus, Grafana)
 docker compose up -d
-# Wait ~60s for Scylla to be ready
-docker compose ps   # all should be "healthy"
+
+# Logları kontrol et
+docker compose logs -f
 ```
 
-### 2. Install dependencies
+### 2. Schema Kontrolü
+
 ```bash
+# ClickHouse
+docker exec -it senneo-clickhouse clickhouse-client
+SHOW DATABASES;
+USE senneo_messages;
+SHOW TABLES;
+
+# ScyllaDB
+docker exec -it senneo-scylla cqlsh
+DESCRIBE KEYSPACES;
+USE senneo;
+DESCRIBE TABLES;
+```
+
+### 3. Backend Başlatma
+
+```bash
+# Ingester (Kafka → ClickHouse)
+cd packages/ingester
 npm install
+npm run dev
+
+# API (Express REST API)
+cd packages/api
+npm install
+npm run dev
+
+# Accounts (Discord scraper controller)
+cd packages/accounts
+npm install
+npm run dev
 ```
 
-### 3. Build
+## 📊 Mimari
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Discord Scraper (accounts)                                 │
+│    └─> Kafka (Redpanda) topic: messages                    │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Ingester (Kafka Consumer)                                  │
+│    ├─> ClickHouse (PRIMARY — mesajlar)                     │
+│    │     • senneo_messages.messages (1 tablo + 3 projeksiyon)│
+│    │     • senneo_users.users_latest                        │
+│    │     • senneo_analytics.* (MV'ler)                      │
+│    └─> (ScyllaDB artık mesaj yazmıyor)                    │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Query Layer (API)                                          │
+│    ├─> ClickHouse (mesaj sorguları)                        │
+│    │     • Point lookup (message_id)                       │
+│    │     • Channel scroll (channel_id, ts DESC)            │
+│    │     • Author messages (author_id)                     │
+│    │     • Full-text search                                │
+│    │     • Analytics queries                               │
+│    └─> ScyllaDB (operasyonel)                              │
+│          • scrape_targets, checkpoints                     │
+│          • auth (dashboard_users, user_tasks)              │
+│          • guild_inventory, invite_pool                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 🗄️ Veritabanları
+
+### ClickHouse (Primary Message Store)
+- **senneo_messages** — Ana mesaj tablosu + 3 projection
+  - Projections: `proj_by_msg_id`, `proj_by_author`, `proj_by_inserted`
+  - ORDER BY: `(guild_id, channel_id, ts, message_id)`
+- **senneo_users** — Kullanıcı profilleri
+  - `users_latest` — En güncel profil
+  - `user_identity_log` — İsim/avatar değişiklik geçmişi
+- **senneo_analytics** — Pre-aggregated tablolar
+  - `channel_daily`, `guild_daily`, `author_daily`
+  - `hourly_heatmap`, `attachment_types`
+- **senneo_operations** — Sistem tabloları
+  - `error_log` — Tüm servislerden hata logları
+
+### ScyllaDB (Operational Tables)
+- **Scraper Control** — scrape_targets, checkpoints, stats, paused_*
+- **Auth & Tasks** — dashboard_users, user_tasks, activity_log
+- **Guild Inventory** — account_guilds, guild_accounts, sync_status
+- **Invite Pool** — invite_pool, invite_pool_jobs, categories
+- **Name Cache** — name_cache (guild/channel adları)
+- **Archived** — archived_accounts, failed_accounts
+
+## 🔧 Servisler
+
+| Servis | Port | Açıklama |
+|--------|------|----------|
+| ClickHouse | 8123 (HTTP), 9000 (Native) | Primary message store |
+| ScyllaDB | 9042 (CQL) | Operational tables |
+| Redpanda | 9092 (Kafka) | Event streaming |
+| Prometheus | 9090 | Metrics |
+| Grafana | 3000 | Dashboards (admin/admin) |
+| API | 4000 | REST API |
+| Ingester | - | Background service |
+
+## 📈 Performans
+
+| Metrik | Değer |
+|--------|-------|
+| **Write throughput** | ~500K msg/s (batch) |
+| **Disk compression** | ~65% (ZSTD3 content, Delta IDs) |
+| **Point lookup** | ~10-50ms (projection) |
+| **Channel scroll** | ~5-20ms (ORDER BY match) |
+| **Full-text search** | ~100-500ms (depends on filters) |
+| **Write amplification** | 1x (tek INSERT, projections otomatik) |
+
+## 🛠️ Geliştirme
+
+### Backend Paketleri
+- **accounts** — Discord scraper controller
+- **ingester** — Kafka consumer → ClickHouse/ScyllaDB writer
+- **api** — Express REST API
+- **shared** — Ortak tip tanımları ve utility'ler
+- **bot** — (İsteğe bağlı) Discord bot
+
+### Komutlar
 ```bash
+# Tüm bağımlılıkları kur (root)
+npm install
+
+# Belirli paketi çalıştır
+cd packages/<package-name>
+npm run dev
+
+# Build (production)
 npm run build
+
+# Test
+npm test
 ```
 
-### 4. Configure
-Edit `.env`:
-- `TARGET_GUILD_IDS` + `TARGET_CHANNEL_IDS` — comma-separated, index-matched pairs
-- `CONCURRENT_GUILDS` — channels scraped simultaneously per account (keep at 5)
+## 📝 API Endpoints
 
-Edit `accounts.json`:
-```json
-{
-  "accounts": [
-    { "token": "YOUR_TOKEN" }
-  ]
-}
-```
+### Messages
+- `GET /api/messages/:messageId` — Point lookup
+- `GET /api/messages/channel/:channelId` — Channel scroll (pagination: `?before=`)
+- `GET /api/messages/author/:authorId` — Author messages
+- `GET /api/messages/search` — Full-text search (`?q=`, filters: guild, channel, author, from, to)
+- `GET /api/messages/count` — Global stats
+- `GET /api/messages/stats/:channelId` — Channel daily stats
 
-Multiple accounts are supported. Targets are distributed round-robin across accounts.
+### Auth
+- `POST /api/auth/login` — Login (JWT)
+- `GET /api/auth/me` — Current user
+- `GET /api/auth/users` — List users (admin)
+- `POST /api/auth/users` — Create user (admin)
 
-### 5. Run
+### Scraper
+- `GET /api/scrape/targets` — List targets
+- `POST /api/scrape/targets` — Add target
+- `GET /api/scrape/stats` — Scraper stats
 
-**Terminal 1 — ingester** (must start before accounts):
-```bash
-npm run start:ingester
-```
-
-**Terminal 2 — accounts scraper**:
-```bash
-npm run start:accounts
-```
-
-**Terminal 3 — API** (optional):
-```bash
-npm run start:api
-```
-
-## API Endpoints
-
-```
-GET /health
-
-# Point lookup (ScyllaDB)
-GET /messages/:messageId
-
-# Cursor-based scroll (ScyllaDB, newest-first)
-GET /messages/channel/:channelId?before=<ISO timestamp>&limit=50
-
-# Analytics search (ClickHouse)
-GET /messages/search?guildId=&channelId=&authorId=&from=&to=&limit=100
-
-# Badge directory — users with all requested badge bits
-GET /messages/badges?badgeMask=64&limit=100
-
-# Message volume stats per channel
-GET /messages/stats/:channelId
-```
-
-## Rate limiting
-
-The scraper is tuned for Discord's undocumented selfbot limits:
-
-- **1 request/second per channel** → 100 messages/request → 100 msg/s per channel
-- **5 concurrent channels** per account → ~500 msg/s per account
-- Automatic 429 backoff using `retryAfter` from Discord response
-- Checkpoints survive restarts — scraping resumes from exact cursor position
-
-## Monitoring
-
-- Grafana: http://localhost:3000 (admin / admin)
-- Prometheus: http://localhost:9090
-- Scrape targets: ScyllaDB, ClickHouse, Redpanda all auto-scraped
-- **Hata Günlüğü**: Dashboard → "Hata Günlüğü" sayfası (sidebar, kısayol: 9)
-
-### Centralized Error Log
-
-All services write structured errors to ClickHouse `senneo.error_log` (MergeTree, 30-day TTL, partitioned by day).
-
-**Categories:** `rate_limit` · `discord_api` · `kafka_producer` · `kafka_consumer` · `scylla_write` · `clickhouse_write` · `dlq_parse` · `checkpoint_persist` · `network` · `auth_login` · `validation` · `proxy` · `unknown`
-
-**API Endpoints:**
-```
-GET  /errors?limit=50&offset=0&since=24h&category=rate_limit&source=accounts&severity=error&q=timeout
-GET  /errors/summary?since=24h
-POST /errors   (body: ErrorLogEntry or ErrorLogEntry[])
-```
-
-**Example ClickHouse queries:**
-```sql
--- Last hour errors by category
-SELECT category, count() AS cnt FROM senneo.error_log
-WHERE ts >= now() - INTERVAL 1 HOUR GROUP BY category ORDER BY cnt DESC;
-
--- Rate limit errors for specific channel
-SELECT ts, message, detail FROM senneo.error_log
-WHERE category = 'rate_limit' AND channel_id = '1234567890' ORDER BY ts DESC LIMIT 20;
-```
-
-**Flood control:** Ingester uses sampled writes (max 1 per fingerprint per 10s). API POST truncates `detail` to 4KB and `message` to 2KB to prevent PII/token leakage.
-
-## Scaling
-
-See `ARCHITECTURE_SCALING_PLAN.md` for the full production topology (500K msg/s, 500B+ rows).
-
-### Multi-Instance Scraper
-
-Each instance handles a slice of `accounts.json` using global indices.
-`ACCOUNTS_RANGE_END` is **exclusive** (half-open interval `[start, end)`):
-50 hesap (global indeks 0–49) için `ACCOUNTS_RANGE_START=0`, `ACCOUNTS_RANGE_END=50`.
+## 🐳 Docker Compose Referans
 
 ```bash
-# Instance 0: accounts [0, 50)  → global indices 0–49
-ACCOUNTS_RANGE_START=0 ACCOUNTS_RANGE_END=50 node packages/accounts/dist/index.js
+# Tüm servisleri başlat
+docker compose up -d
 
-# Instance 1: accounts [50, 100) → global indices 50–99
-ACCOUNTS_RANGE_START=50 ACCOUNTS_RANGE_END=100 node packages/accounts/dist/index.js
+# Belirli servisi başlat
+docker compose up -d clickhouse scylla redpanda
+
+# Logları görüntüle
+docker compose logs -f <service-name>
+
+# Yeniden başlat
+docker compose restart <service-name>
+
+# Durdur
+docker compose down
+
+# Volume'leri de sil (TAM RESET)
+docker compose down -v
 ```
 
-**Rules:**
-- Ranges are half-open `[start, end)` — end is exclusive, matching JS `Array.slice()`.
-- Ranges must not overlap across instances.
-- `scrape_targets.account_idx` uses the **global** index from accounts.json, not a local offset.
-- If env is unset, all accounts are loaded (backward compatible single-instance mode).
-- Hot-reload (`accounts.json` file watch) respects the range.
+## 🔒 Güvenlik
 
-### 20 Instance × 50 Account Example
+### Production Checklist
+- [ ] `.env` dosyasında güçlü `JWT_SECRET` ayarla
+- [ ] `ADMIN_PASSWORD` değiştir
+- [ ] ScyllaDB RF=3, NetworkTopologyStrategy kullan
+- [ ] ClickHouse için TLS yapılandır
+- [ ] Firewall kuralları (sadece gerekli portlar açık)
+- [ ] Rate limiting ekle (nginx/traefik)
+- [ ] Backup stratejisi oluştur
 
-```bash
-# Generate all 20 instance env files (accounts.json has 1000 entries):
-for i in $(seq 0 19); do
-  START=$((i * 50))
-  END=$(((i + 1) * 50))
-  cat > .env.accounts-${i} << EOF
-ACCOUNTS_RANGE_START=${START}
-ACCOUNTS_RANGE_END=${END}
-CONCURRENT_GUILDS=5
-FETCH_DELAY_MS=150
-RATE_LIMIT_COOLDOWN_MS=10000
-ADAPTIVE_MIN_MS=120
-KAFKA_BROKERS=localhost:9092
-KAFKA_TOPIC=messages
-SCYLLA_HOSTS=localhost
-SCYLLA_KEYSPACE=senneo
-EOF
-done
+## 📚 Daha Fazla Bilgi
 
-# Start instance N:
-env $(cat .env.accounts-0 | xargs) node packages/accounts/dist/index.js
-```
+- [CLICKHOUSE_MIGRATION_PLAN.md](./CLICKHOUSE_MIGRATION_PLAN.md) — Geçiş detayları
+- [ARCHITECTURE_SCALING_PLAN.md](./ARCHITECTURE_SCALING_PLAN.md) — Production mimari
 
-### Proxy Setup
+## 📄 Lisans
 
-Mimari hazırlığı mevcut; **varsayılan doğrudan IP** (VDS egress). Proxy'yi `PROXY_ENABLED=true` ile açarsınız.
-
-1. Copy `proxies.example.json` → `proxies.json`
-2. Fill in your SOCKS5/HTTP proxy URLs
-3. Set `PROXY_ENABLED=true` (or `=1`) in env
-4. Start accounts — each account is deterministically assigned a proxy (`globalIdx % pool.length`)
-5. Hot-reload: edit proxies.json while running (new assignments use updated pool)
-
-Without `PROXY_ENABLED=true`, all Discord connections go direct — proxy code is loaded but inactive.
-Not: `fetchGuildIds()` şu an her zaman doğrudan bağlantı kullanır; ileride proxy'e bağlanabilir.
-
-### Scraper Parameter Tuning
-
-All timing parameters are configurable via env (see `scraper.ts`):
-
-| Env Variable | Default | Description |
-|---|---|---|
-| `FETCH_DELAY_MS` | 150 | Base delay between fetch calls per channel |
-| `RATE_LIMIT_COOLDOWN_MS` | 10000 | Extra wait after 429 |
-| `ADAPTIVE_MIN_MS` | 120 | Minimum adaptive delay |
-| `ADAPTIVE_MAX_MS` | 2000 | Maximum adaptive delay |
-| `ADAPTIVE_STEP_UP_MS` | 100 | Delay increase on rate limit |
-| `ADAPTIVE_STEP_DOWN_MS` | 5 | Delay decrease on success |
-| `SCRAPE_BATCH_SIZE` | 100 | Messages per Discord API fetch |
-| `SCRAPE_MAX_RETRIES` | 5 | Max retries before giving up on a channel |
-| `CONCURRENT_GUILDS` | 15 | Channels scraped simultaneously per account |
-
-### Kafka/Ingester Scaling
-
-| Env Variable | Default | Description |
-|---|---|---|
-| `KAFKA_PARTITIONS` | 16 | Topic partition count (prod: 256) |
-| `KAFKA_REPLICATION_FACTOR` | 1 | Topic RF (prod: 3) |
-| `KAFKA_COMPRESSION` | gzip | Compression type (prod: lz4) |
-
-Multiple ingester instances can run with the same consumer group (`senneo-ingester`) — Kafka auto-assigns partitions.
-
-## ScyllaDB bucket strategy
-
-`bucket = Math.floor(ts_ms / 86_400_000)` (1 day per bucket)
-
-Each partition holds at most one day of messages per channel. At 100 msg/s that's 8.6M messages/day — still well within Scylla's partition size limits.
+MIT

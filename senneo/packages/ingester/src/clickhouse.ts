@@ -3,7 +3,7 @@ import { RawMessage } from '@senneo/shared';
 
 const CH_HOST = process.env.CLICKHOUSE_HOST ?? 'localhost';
 const CH_PORT = process.env.CLICKHOUSE_PORT ?? '8123';
-const CH_DB   = process.env.CLICKHOUSE_DB   ?? 'senneo';
+const CH_DB   = process.env.CLICKHOUSE_DB   ?? 'senneo_messages';
 
 function toChTs(iso: string): string {
   return iso.replace('T', ' ').replace('Z', '');
@@ -31,11 +31,22 @@ export async function createClickHouseClient(): Promise<ClickHouseClient> {
 }
 
 async function initSchema(client: ClickHouseClient): Promise<void> {
-  await client.exec({ query: `CREATE DATABASE IF NOT EXISTS ${CH_DB}` });
+  // Migration: New database structure
+  // senneo_messages: messages table + projections
+  // senneo_users: users_latest, user_identity_log
+  // senneo_operations: error_log
+  // senneo_analytics: materialized views
+  
+  // Note: Init SQL scripts in docker-compose handle full schema creation.
+  // This function only ensures backwards compatibility and column migrations.
+  
+  await client.exec({ query: `CREATE DATABASE IF NOT EXISTS senneo_messages` });
+  await client.exec({ query: `CREATE DATABASE IF NOT EXISTS senneo_users` });
+  await client.exec({ query: `CREATE DATABASE IF NOT EXISTS senneo_operations` });
 
   await client.exec({
     query: `
-      CREATE TABLE IF NOT EXISTS ${CH_DB}.messages (
+      CREATE TABLE IF NOT EXISTS senneo_messages.messages (
         message_id     UInt64,
         channel_id     UInt64,
         guild_id       UInt64,
@@ -67,7 +78,7 @@ async function initSchema(client: ClickHouseClient): Promise<void> {
 
   await client.exec({
     query: `
-      CREATE TABLE IF NOT EXISTS ${CH_DB}.users_latest (
+      CREATE TABLE IF NOT EXISTS senneo_users.users_latest (
         author_id    UInt64,
         author_name  String COMMENT 'Discord global username (NOT display name)',
         badge_mask   UInt64,
@@ -83,7 +94,7 @@ async function initSchema(client: ClickHouseClient): Promise<void> {
   // Materialized view: per-channel daily activity (pre-aggregated for fast dashboards)
   await client.exec({
     query: `
-      CREATE MATERIALIZED VIEW IF NOT EXISTS ${CH_DB}.channel_daily_mv
+      CREATE MATERIALIZED VIEW IF NOT EXISTS senneo_analytics.channel_daily_mv
       ENGINE = SummingMergeTree()
       ORDER BY (channel_id, date)
       POPULATE
@@ -92,7 +103,7 @@ async function initSchema(client: ClickHouseClient): Promise<void> {
         toDate(ts) AS date,
         count()    AS message_count,
         uniq(author_id) AS unique_authors
-      FROM ${CH_DB}.messages
+      FROM senneo_messages.messages
       GROUP BY channel_id, date
     `,
   });
@@ -104,7 +115,7 @@ async function initSchema(client: ClickHouseClient): Promise<void> {
   // LRU cache stays as write-volume optimization, NOT correctness dependency.
   await client.exec({
     query: `
-      CREATE TABLE IF NOT EXISTS ${CH_DB}.user_identity_log (
+      CREATE TABLE IF NOT EXISTS senneo_users.user_identity_log (
         author_id      UInt64,
         field          LowCardinality(String) COMMENT 'username | display_name | avatar | nick',
         value          String,
@@ -125,7 +136,7 @@ async function initSchema(client: ClickHouseClient): Promise<void> {
   // MergeTree (append-only, no dedup needed), 30-day TTL, partitioned by day.
   await client.exec({
     query: `
-      CREATE TABLE IF NOT EXISTS ${CH_DB}.error_log (
+      CREATE TABLE IF NOT EXISTS senneo_operations.error_log (
         ts               DateTime64(3, 'UTC'),
         severity         LowCardinality(String) COMMENT 'warn | error | critical',
         category         LowCardinality(String) COMMENT 'rate_limit | discord_api | scylla_write | ...',
@@ -151,24 +162,24 @@ async function initSchema(client: ClickHouseClient): Promise<void> {
     `,
   });
 
-  await client.exec({ query: `ALTER TABLE ${CH_DB}.error_log ADD COLUMN IF NOT EXISTS account_id String DEFAULT ''` }).catch(() => {});
+  await client.exec({ query: `ALTER TABLE senneo_operations.error_log ADD COLUMN IF NOT EXISTS account_id String DEFAULT ''` }).catch(() => {});
 
   // Migration: add source_msg_ts to existing table if it was created with old schema
-  await client.exec({ query: `ALTER TABLE ${CH_DB}.user_identity_log ADD COLUMN IF NOT EXISTS source_msg_ts DateTime64(3, 'UTC') DEFAULT '1970-01-01'` }).catch(() => {});
+  await client.exec({ query: `ALTER TABLE senneo_users.user_identity_log ADD COLUMN IF NOT EXISTS source_msg_ts DateTime64(3, 'UTC') DEFAULT '1970-01-01'` }).catch(() => {});
 
   // Idempotent column migrations (metadata-only, no data rewrite)
-  await client.exec({ query: `ALTER TABLE ${CH_DB}.messages ADD COLUMN IF NOT EXISTS author_avatar String DEFAULT ''` }).catch(() => {});
-  await client.exec({ query: `ALTER TABLE ${CH_DB}.messages ADD COLUMN IF NOT EXISTS is_bot UInt8 DEFAULT 0` }).catch(() => {});
-  await client.exec({ query: `ALTER TABLE ${CH_DB}.messages ADD COLUMN IF NOT EXISTS display_name String DEFAULT ''` }).catch(() => {});
-  await client.exec({ query: `ALTER TABLE ${CH_DB}.users_latest ADD COLUMN IF NOT EXISTS author_avatar String DEFAULT ''` }).catch(() => {});
-  await client.exec({ query: `ALTER TABLE ${CH_DB}.users_latest ADD COLUMN IF NOT EXISTS is_bot UInt8 DEFAULT 0` }).catch(() => {});
-  await client.exec({ query: `ALTER TABLE ${CH_DB}.users_latest ADD COLUMN IF NOT EXISTS display_name String DEFAULT ''` }).catch(() => {});
+  await client.exec({ query: `ALTER TABLE senneo_messages.messages ADD COLUMN IF NOT EXISTS author_avatar String DEFAULT ''` }).catch(() => {});
+  await client.exec({ query: `ALTER TABLE senneo_messages.messages ADD COLUMN IF NOT EXISTS is_bot UInt8 DEFAULT 0` }).catch(() => {});
+  await client.exec({ query: `ALTER TABLE senneo_messages.messages ADD COLUMN IF NOT EXISTS display_name String DEFAULT ''` }).catch(() => {});
+  await client.exec({ query: `ALTER TABLE senneo_users.users_latest ADD COLUMN IF NOT EXISTS author_avatar String DEFAULT ''` }).catch(() => {});
+  await client.exec({ query: `ALTER TABLE senneo_users.users_latest ADD COLUMN IF NOT EXISTS is_bot UInt8 DEFAULT 0` }).catch(() => {});
+  await client.exec({ query: `ALTER TABLE senneo_users.users_latest ADD COLUMN IF NOT EXISTS display_name String DEFAULT ''` }).catch(() => {});
 
   // FIX: Migrate existing MergeTree table to ReplacingMergeTree.
   // MODIFY ENGINE is a metadata-only operation — no data rewrite, instant.
   // Safe to run on every startup (idempotent: already-ReplacingMergeTree tables are a no-op).
   await client.exec({
-    query: `ALTER TABLE ${CH_DB}.messages MODIFY ENGINE = ReplacingMergeTree(inserted_at)`,
+    query: `ALTER TABLE senneo_messages.messages MODIFY ENGINE = ReplacingMergeTree(inserted_at)`,
   }).catch((err: unknown) => {
     // Non-fatal: older CH versions may not support MODIFY ENGINE
     console.warn('[clickhouse] Engine migration skipped (non-fatal):', (err as Error)?.message?.slice(0, 120));
@@ -303,12 +314,12 @@ export async function writeMessages(
 
   // Fire all three inserts in parallel — identity_log is non-blocking (like users_latest)
   const inserts: Promise<unknown>[] = [
-    client.insert({ table: `${CH_DB}.messages`,     values: msgRows,  format: 'JSONEachRow' }),
-    client.insert({ table: `${CH_DB}.users_latest`, values: userRows, format: 'JSONEachRow' }),
+    client.insert({ table: `senneo_messages.messages`,     values: msgRows,  format: 'JSONEachRow' }),
+    client.insert({ table: `senneo_users.users_latest`, values: userRows, format: 'JSONEachRow' }),
   ];
   if (identityRows.length > 0) {
     inserts.push(
-      client.insert({ table: `${CH_DB}.user_identity_log`, values: identityRows, format: 'JSONEachRow' })
+      client.insert({ table: `senneo_users.user_identity_log`, values: identityRows, format: 'JSONEachRow' })
     );
   }
 

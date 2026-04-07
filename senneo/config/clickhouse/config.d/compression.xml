@@ -1,0 +1,29 @@
+<!-- ─────────────────────────────────────────────────────────────────────────
+     compression.xml — Senneo ClickHouse Default Sıkıştırma Politikası
+     Kolon düzeyinde CODEC tanımları messages tablosunda yapılıyor (ZSTD, Delta).
+     Bu ayar, tablo şemasında CODEC belirtilmeyen kolonlar için fallback'tir.
+     ───────────────────────────────────────────────────────────────────────── -->
+<clickhouse>
+    <compression>
+
+        <!-- Küçük part'lar (sıcak veri, yeni yazılan, sık okunan)
+             LZ4: hızlı compress/decompress, düşük CPU yükü.
+             100 MB'ın altındaki part'lara uygulanır. -->
+        <case>
+            <min_part_size>0</min_part_size>
+            <min_part_size_ratio>0</min_part_size_ratio>
+            <max_part_size>104857600</max_part_size>
+            <method>lz4</method>
+        </case>
+
+        <!-- Büyük part'lar (soğuk veri, merge sonrası, büyük partition'lar)
+             ZSTD level 1: LZ4'e göre ~%30-40 daha iyi sıkıştırma,
+             makul decompress hızı. Cold data okuma latency'si zaten yüksek. -->
+        <case>
+            <min_part_size>104857600</min_part_size>
+            <method>zstd</method>
+            <level>1</level>
+        </case>
+
+    </compression>
+</clickhouse>

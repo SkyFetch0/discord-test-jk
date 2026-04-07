@@ -1,0 +1,185 @@
+<!-- ─────────────────────────────────────────────────────────────────────────
+     default.xml — Senneo ClickHouse Kullanıcı ve Profil Yapılandırması
+
+     KULLANICILAR:
+       senneo_ingester  → Kafka'dan mesaj yazan ingester servisi
+       senneo_api       → REST API, dashboard backend
+       senneo_dashboard → Dashboard frontend (read-only analytics)
+
+     ŞİFRE HASH OLUŞTURMA:
+       Linux/Mac: echo -n "sifren" | sha256sum
+       Windows:   certutil -hashfile <(echo -n "sifren") SHA256
+       Online:    https://emn178.github.io/online-tools/sha256.html
+
+     PLACEHOLDER_HASH değerini gerçek SHA-256 hash ile değiştir.
+     ───────────────────────────────────────────────────────────────────────── -->
+<clickhouse>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         QUERY PROFİLLERİ
+         ═══════════════════════════════════════════════════════════════ -->
+    <profiles>
+
+        <!-- ─────────────────────────────────────────────────────────
+             ingester: Yüksek throughput insert, büyük batch desteği
+             ───────────────────────────────────────────────────────── -->
+        <ingester>
+            <!-- 8 GB per sorgu — büyük batch insert'ler için -->
+            <max_memory_usage>8589934592</max_memory_usage>
+            <!-- 500K satır per block — 200K/s ingest'te optimal batch boyutu -->
+            <max_insert_block_size>500000</max_insert_block_size>
+            <!-- Çok farklı guild/ay'a dağılan insert'ler için yeterli partition limiti -->
+            <max_partitions_per_insert_block>256</max_partitions_per_insert_block>
+            <async_insert>1</async_insert>
+            <wait_for_async_insert>1</wait_for_async_insert>
+            <insert_deduplicate>1</insert_deduplicate>
+            <!-- Sorgu timeout'u yok — ingester uzun süren insert'lerde timeout istemez -->
+            <max_execution_time>0</max_execution_time>
+        </ingester>
+
+        <!-- ─────────────────────────────────────────────────────────
+             api: Analitik sorgular, dashboard API
+             ───────────────────────────────────────────────────────── -->
+        <api>
+            <!-- 4 GB per sorgu — analitik aggregation'lar için yeterli -->
+            <max_memory_usage>4294967296</max_memory_usage>
+            <!-- 60 sn timeout — uzun süren sorgular sistemi bloke etmesin -->
+            <max_execution_time>60</max_execution_time>
+            <!-- Sorgu başına max 8 thread — eşzamanlı API istekleri birbirini ezmesin -->
+            <max_threads>8</max_threads>
+            <!-- 1M satırdan fazla response döndürme -->
+            <max_result_rows>1000000</max_result_rows>
+            <!-- GROUP BY RAM'e sığmazsa diske yaz (2 GB threshold) -->
+            <max_bytes_before_external_group_by>2147483648</max_bytes_before_external_group_by>
+            <!-- ORDER BY RAM'e sığmazsa diske yaz (2 GB threshold) -->
+            <max_bytes_before_external_sort>2147483648</max_bytes_before_external_sort>
+        </api>
+
+        <!-- ─────────────────────────────────────────────────────────
+             dashboard: Salt-okunur, hafif analytics sorguları
+             ───────────────────────────────────────────────────────── -->
+        <dashboard>
+            <readonly>1</readonly>
+            <!-- 2 GB — dashboard sorguları hafif olmalı -->
+            <max_memory_usage>2147483648</max_memory_usage>
+            <max_execution_time>30</max_execution_time>
+            <max_threads>4</max_threads>
+        </dashboard>
+
+    </profiles>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         KULLANICILAR
+         ═══════════════════════════════════════════════════════════════ -->
+    <users>
+
+        <!-- ─────────────────────────────────────────────────────────
+             senneo_ingester — Kafka ingester servisi
+             ───────────────────────────────────────────────────────── -->
+        <senneo_ingester>
+            <!-- SHA-256 hash: echo -n "sifren" | sha256sum -->
+            <password_sha256_hex>PLACEHOLDER_HASH_INGESTER</password_sha256_hex>
+            <profile>ingester</profile>
+            <quota>ingester_quota</quota>
+            <networks>
+                <!-- Tüm ağlara izin ver (Docker iç ağı için gerekli) -->
+                <ip>::/0</ip>
+            </networks>
+            <access_management>0</access_management>
+        </senneo_ingester>
+
+        <!-- ─────────────────────────────────────────────────────────
+             senneo_api — REST API backend
+             ───────────────────────────────────────────────────────── -->
+        <senneo_api>
+            <password_sha256_hex>PLACEHOLDER_HASH_API</password_sha256_hex>
+            <profile>api</profile>
+            <quota>api_quota</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <access_management>0</access_management>
+        </senneo_api>
+
+        <!-- ─────────────────────────────────────────────────────────
+             senneo_dashboard — Dashboard (read-only)
+             ───────────────────────────────────────────────────────── -->
+        <senneo_dashboard>
+            <password_sha256_hex>PLACEHOLDER_HASH_DASHBOARD</password_sha256_hex>
+            <profile>dashboard</profile>
+            <quota>default</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <access_management>0</access_management>
+        </senneo_dashboard>
+
+    </users>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         QUOTA'LAR
+         ═══════════════════════════════════════════════════════════════ -->
+    <quotas>
+
+        <default>
+            <interval>
+                <duration>3600</duration>
+                <queries>10000</queries>
+                <errors>1000</errors>
+                <result_rows>100000000</result_rows>
+                <read_rows>10000000000</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </default>
+
+        <!-- Ingester için daha yüksek limit — sürekli yazma yapıyor -->
+        <ingester_quota>
+            <interval>
+                <duration>3600</duration>
+                <!-- Saatte sınırsız insert (200K/s × 3600s = 720M insert/h) -->
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </ingester_quota>
+
+        <!-- API için güvenli sınır -->
+        <api_quota>
+            <interval>
+                <duration>3600</duration>
+                <queries>50000</queries>
+                <errors>500</errors>
+                <result_rows>500000000</result_rows>
+                <read_rows>50000000000</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </api_quota>
+
+    </quotas>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         GRANTS — Kullanıcı İzinleri
+         NOT: GRANT komutları init SQL'de çalıştırılıyor.
+              Buradaki blok yedek referans olarak saklanıyor.
+
+    Ingester:
+      GRANT INSERT, SELECT ON senneo_messages.*  TO senneo_ingester;
+      GRANT INSERT, SELECT ON senneo_users.*     TO senneo_ingester;
+      GRANT INSERT        ON senneo_analytics.*  TO senneo_ingester;
+      GRANT INSERT        ON senneo_operations.* TO senneo_ingester;
+
+    API:
+      GRANT SELECT ON senneo_messages.*          TO senneo_api;
+      GRANT SELECT ON senneo_users.*             TO senneo_api;
+      GRANT SELECT ON senneo_analytics.*         TO senneo_api;
+      GRANT SELECT ON senneo_operations.*        TO senneo_api;
+      GRANT ALTER UPDATE ON senneo_users.users_latest TO senneo_api;
+
+    Dashboard:
+      GRANT SELECT ON senneo_analytics.*         TO senneo_dashboard;
+      GRANT SELECT ON senneo_users.users_latest  TO senneo_dashboard;
+         ═══════════════════════════════════════════════════════════════ -->
+
+</clickhouse>

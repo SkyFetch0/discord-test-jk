@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ClickHouseClient } from '@clickhouse/client';
 
-const CH_DB = process.env.CLICKHOUSE_DB ?? 'senneo';
+const CH_DB = process.env.CLICKHOUSE_DB ?? 'senneo_operations';
 
 const CH_QUERY_SAFETY = {
   max_rows_to_read: '5000000',
@@ -31,7 +31,7 @@ async function writeErrors(ch: ClickHouseClient, entries: Record<string, unknown
     error_code:     String(e.error_code ?? ''),
     correlation_id: String(e.correlation_id ?? ''),
   }));
-  await ch.insert({ table: `${CH_DB}.error_log`, values: rows, format: 'JSONEachRow' });
+  await ch.insert({ table: `senneo_operations.error_log`, values: rows, format: 'JSONEachRow' });
 }
 
 // ── Router ───────────────────────────────────────────────────────────────

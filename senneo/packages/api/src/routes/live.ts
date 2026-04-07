@@ -7,8 +7,8 @@ import path from 'path';
 import { buildPauseIntentView, isPauseAcknowledged, readPausedAccounts, readPausedChannels } from '../scrape-control';
 import { fetchNamesByIds, fetchIconsByIds, enrichMessagesWithNames } from './name-resolve';
 
-const CH_DB    = process.env.CLICKHOUSE_DB    ?? 'senneo';
-const KEYSPACE = process.env.SCYLLA_KEYSPACE  ?? 'senneo';
+const CH_MSG_DB = process.env.CLICKHOUSE_MSG_DB ?? 'senneo_messages';
+const KEYSPACE  = process.env.SCYLLA_KEYSPACE   ?? 'senneo';
 
 // P1-2: Safety limits for CH queries to prevent OOM/timeout at scale
 const CH_QUERY_SAFETY = {
@@ -483,7 +483,7 @@ export function liveRouter(ch: ClickHouseClient, scylla: CassandraClient): Route
       const result = await ch.query({
         query: `SELECT message_id, channel_id, guild_id, author_id, author_name,
                        nick, content, ts, badge_mask, author_avatar, ref_msg_id
-                FROM ${CH_DB}.messages ${where}
+                FROM ${CH_MSG_DB}.messages ${where}
                 ORDER BY inserted_at DESC LIMIT {limit:UInt32}`,
         query_params: { ...(channelId ? { channelId } : {}), limit },
         format: 'JSONEachRow',
@@ -547,7 +547,7 @@ export function liveRouter(ch: ClickHouseClient, scylla: CassandraClient): Route
         const result = await ch.query({
           query: `SELECT message_id, channel_id, guild_id, author_id, author_name,
                          nick, content, ts, badge_mask, author_avatar, ref_msg_id
-                  FROM ${CH_DB}.messages
+                  FROM ${CH_MSG_DB}.messages
                   WHERE message_id > {since:UInt64}
                   ORDER BY inserted_at DESC
                   LIMIT 50`,
@@ -612,7 +612,7 @@ export function liveRouter(ch: ClickHouseClient, scylla: CassandraClient): Route
                        uniqIf(author_id, is_bot = 0) AS db_human_authors,
                        countIf(is_bot = 1) AS db_bot_messages,
                        min(ts) AS oldest_ts, max(ts) AS newest_ts, max(inserted_at) AS last_insert_ts
-                FROM ${CH_DB}.messages`,
+                FROM ${CH_MSG_DB}.messages`,
         format: 'JSONEachRow',
         clickhouse_settings: CH_QUERY_SAFETY,
       });
