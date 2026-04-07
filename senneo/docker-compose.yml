@@ -221,7 +221,7 @@ services:
     container_name: senneo-grafana
     restart: unless-stopped
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      - "${GRAFANA_PORT:-3001}:3000"
     volumes:
       - grafana_data:/var/lib/grafana
     environment:
@@ -233,6 +233,116 @@ services:
     depends_on:
       prometheus:
         condition: service_started
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Bot — Discord selfbot → Kafka producer (real-time messages)
+  # ════════════════════════════════════════════════════════════════════════════
+  bot:
+    build:
+      context: .
+      target: bot
+    container_name: senneo-bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - KAFKA_BROKERS=redpanda:29092
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-messages}
+    networks:
+      - senneo-net
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Ingester — Kafka consumer → ClickHouse + ScyllaDB writer
+  # ════════════════════════════════════════════════════════════════════════════
+  ingester:
+    build:
+      context: .
+      target: ingester
+    container_name: senneo-ingester
+    restart: unless-stopped
+    environment:
+      - KAFKA_BROKERS=redpanda:29092
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-messages}
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-senneo_messages}
+      - SCYLLA_HOSTS=scylla
+      - SCYLLA_KEYSPACE=${SCYLLA_KEYSPACE:-senneo}
+    networks:
+      - senneo-net
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      scylla:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # API — Express REST API + Dashboard backend
+  # ════════════════════════════════════════════════════════════════════════════
+  api:
+    build:
+      context: .
+      target: api
+    container_name: senneo-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-4000}:4000"
+    environment:
+      - PORT=4000
+      - NODE_ENV=${NODE_ENV:-production}
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-senneo_messages}
+      - CLICKHOUSE_MSG_DB=${CLICKHOUSE_MSG_DB:-senneo_messages}
+      - CLICKHOUSE_USR_DB=${CLICKHOUSE_USR_DB:-senneo_users}
+      - SCYLLA_HOSTS=scylla
+      - SCYLLA_KEYSPACE=${SCYLLA_KEYSPACE:-senneo}
+      - KAFKA_BROKERS=redpanda:29092
+      - JWT_SECRET=${JWT_SECRET:-change-this-in-production}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+    networks:
+      - senneo-net
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      scylla:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Accounts — Discord scraper controller (multi-account)
+  # ════════════════════════════════════════════════════════════════════════════
+  accounts:
+    build:
+      context: .
+      target: accounts
+    container_name: senneo-accounts
+    restart: unless-stopped
+    environment:
+      - KAFKA_BROKERS=redpanda:29092
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-messages}
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-senneo_messages}
+      - SCYLLA_HOSTS=scylla
+      - SCYLLA_KEYSPACE=${SCYLLA_KEYSPACE:-senneo}
+    volumes:
+      - ./accounts.json:/app/accounts.json:ro
+      - ./proxies.json:/app/proxies.json:ro
+    networks:
+      - senneo-net
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      scylla:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
 
 # ════════════════════════════════════════════════════════════════════════════════
 # Named Volumes — Persist data across restarts

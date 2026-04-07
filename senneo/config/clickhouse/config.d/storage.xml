@@ -1,9 +1,15 @@
 <!-- ─────────────────────────────────────────────────────────────────────────
-     storage.xml — Senneo ClickHouse Depolama Politikası
-     Varsayılan: tek disk (default).
-     Opsiyonel: SSD+HDD tiered storage — aşağıdaki bloğu uncomment ederek etkinleştir.
+     storage.xml — Senneo ClickHouse Depolama Yapılandırması (DEV)
+     ClickHouse 24.8+: default disk path top-level <path> elementinde olmalı.
+     storage_configuration sadece ek diskler ve policy'ler için kullanılır.
      ───────────────────────────────────────────────────────────────────────── -->
 <clickhouse>
+
+    <!-- ClickHouse 24.8+ requires this top-level path for the default disk -->
+    <path>/var/lib/clickhouse/</path>
+
+    <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
+    <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
 
     <!--
     ═══════════════════════════════════════════════════════════════
@@ -11,10 +17,7 @@
     ═══════════════════════════════════════════════════════════════
     Etkinleştirmek için:
       1. Aşağıdaki bloğun comment'ini kaldır
-      2. Docker volume'ları NVMe ve HDD mount point'lerine bağla:
-           volumes:
-             - /mnt/nvme0/clickhouse:/var/lib/clickhouse/hot
-             - /mnt/hdd0/clickhouse:/var/lib/clickhouse/cold
+      2. Docker volume'ları NVMe ve HDD mount point'lerine bağla
       3. messages tablosu için: SETTINGS storage_policy = 'tiered'
 
     <storage_configuration>
@@ -42,23 +45,5 @@
         </policies>
     </storage_configuration>
     -->
-
-    <!-- Varsayılan tek disk yapılandırması (tiered kapalıyken geçerli) -->
-    <storage_configuration>
-        <disks>
-            <default>
-                <path>/var/lib/clickhouse/</path>
-            </default>
-        </disks>
-        <policies>
-            <default>
-                <volumes>
-                    <main>
-                        <disk>default</disk>
-                    </main>
-                </volumes>
-            </default>
-        </policies>
-    </storage_configuration>
 
 </clickhouse>

@@ -56,26 +56,10 @@
 
     <!-- ═══════════════════════════════════════════════════════════════
          Async Insert — Server-side Batching
+         ═══════════════════════════════════════════════════════════════
+         NOT: async_insert ayarları user-level setting'dir.
+         Bu ayarlar users.d/default.xml → profiles bölümüne taşınmıştır.
+         Server config'e koymak ClickHouse 24.8+ crash'e neden olur.
          ═══════════════════════════════════════════════════════════════ -->
-
-    <!-- Ingester zaten 2000 satırlık client-side batch yapıyor.
-         Async insert, kısa süreli ingest burst'larında ek güvenlik katmanı sağlar.
-         wait_for_async_insert=1: insert acknowledge edilmeden önce flush'ı bekle. -->
-    <async_insert>1</async_insert>
-    <wait_for_async_insert>1</wait_for_async_insert>
-
-    <!-- Buffer 10 MB dolunca flush et -->
-    <async_insert_max_data_size>10485760</async_insert_max_data_size>
-
-    <!-- 2 saniye içinde dolmazsa yine de flush et -->
-    <async_insert_busy_timeout_ms>2000</async_insert_busy_timeout_ms>
-
-    <!-- 500 insert sorgusu birikince flush et -->
-    <async_insert_max_query_number>500</async_insert_max_query_number>
-
-    <!-- Buffer window içindeki duplikat insert'leri filtrele.
-         Kafka redelivery ve scraper restart'larından gelen duplikatlar
-         buradan önce elenir; ReplacingMergeTree ise kalıcı backstop'tur. -->
-    <async_insert_deduplicate>1</async_insert_deduplicate>
 
 </clickhouse>
