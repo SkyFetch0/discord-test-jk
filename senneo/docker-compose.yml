@@ -235,6 +235,25 @@ services:
         condition: service_started
 
   # ════════════════════════════════════════════════════════════════════════════
+  # Dashboard — React/Vite SPA + Nginx (API proxy dahil)
+  # ════════════════════════════════════════════════════════════════════════════
+  # Nginx, frontend statik dosyaları serve eder + API endpoint'lerini proxy'ler.
+  # Kullanıcı sadece dashboard portuna bağlanır, API'ye arka planda proxy yapılır.
+  dashboard:
+    build:
+      context: ../senneo-dashboard
+      dockerfile: Dockerfile
+    container_name: senneo-dashboard
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_PORT:-8080}:80"
+    networks:
+      - senneo-net
+    depends_on:
+      api:
+        condition: service_started
+
+  # ════════════════════════════════════════════════════════════════════════════
   # Bot — Discord selfbot → Kafka producer (real-time messages)
   # ════════════════════════════════════════════════════════════════════════════
   bot:
@@ -291,6 +310,8 @@ services:
     restart: unless-stopped
     ports:
       - "${API_PORT:-4000}:4000"
+    volumes:
+      - ./accounts.json:/app/accounts.json:ro
     environment:
       - PORT=4000
       - NODE_ENV=${NODE_ENV:-production}
@@ -331,6 +352,17 @@ services:
       - CLICKHOUSE_DB=${CLICKHOUSE_DB:-senneo_messages}
       - SCYLLA_HOSTS=scylla
       - SCYLLA_KEYSPACE=${SCYLLA_KEYSPACE:-senneo}
+      # Scraper Configuration - 80 msg/s per channel (1250ms for 100 msg batch)
+      - CONCURRENT_GUILDS=5
+      - SCRAPE_BATCH_SIZE=100
+      - FETCH_DELAY_MS=1250
+      - ADAPTIVE_MIN_MS=1250
+      - ADAPTIVE_MAX_MS=1250
+      - RATE_LIMIT_COOLDOWN_MS=10000
+      # Worker Configuration
+      - SCRAPER_WORKER_ID=${SCRAPER_WORKER_ID:-accounts-1}
+      - LOGIN_CONCURRENCY=${LOGIN_CONCURRENCY:-10}
+      - LOGIN_DELAY_MS=${LOGIN_DELAY_MS:-1500}
     volumes:
       - ./accounts.json:/app/accounts.json:ro
       - ./proxies.json:/app/proxies.json:ro

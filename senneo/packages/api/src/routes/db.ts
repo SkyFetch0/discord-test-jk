@@ -2,7 +2,34 @@ import { Router, Request, Response } from 'express';
 import { Client as CassandraClient, types as CassandraTypes } from 'cassandra-driver';
 import { ClickHouseClient } from '@clickhouse/client';
 
-const CH_DB    = process.env.CLICKHOUSE_DB   ?? 'senneo';
+const CH_DB    = process.env.CLICKHOUSE_DB      ?? 'senneo_messages';
+const CH_MSG   = process.env.CLICKHOUSE_MSG_DB  ?? 'senneo_messages';
+const CH_USR   = process.env.CLICKHOUSE_USR_DB  ?? 'senneo_users';
+const CH_ANA   = process.env.CLICKHOUSE_ANA_DB  ?? 'senneo_analytics';
+const CH_OPS   = process.env.CLICKHOUSE_OPS_DB  ?? 'senneo_operations';
+const CH_ALL_DBS = [CH_MSG, CH_USR, CH_ANA, CH_OPS];
+
+// Table → database mapping (resolved at query time)
+const TABLE_DB_MAP: Record<string, string> = {
+  messages:           CH_MSG,
+  users_latest:       CH_USR,
+  user_identity_log:  CH_USR,
+  author_daily:       CH_ANA,
+  author_daily_mv:    CH_ANA,
+  channel_daily:      CH_ANA,
+  channel_daily_mv:   CH_ANA,
+  guild_daily:        CH_ANA,
+  guild_daily_mv:     CH_ANA,
+  hourly_heatmap:     CH_ANA,
+  hourly_heatmap_mv:  CH_ANA,
+  attachment_types:    CH_ANA,
+  attachment_types_mv: CH_ANA,
+  error_log:          CH_OPS,
+  ingester_metrics:   CH_OPS,
+};
+function resolveTableDb(table: string): string {
+  return TABLE_DB_MAP[table] ?? CH_MSG;
+}
 const KEYSPACE = process.env.SCYLLA_KEYSPACE ?? 'senneo';
 
 // Async dedup state — dedup runs in background, frontend polls /status
@@ -43,7 +70,7 @@ async function enrichUserRowsFromMessages(
           max(ts)         AS _last_seen,
           argMaxIf(author_avatar, ts, author_avatar != '') AS _best_avatar,
           groupBitOr(badge_mask) AS _badge_mask_agg
-        FROM ${CH_DB}.messages
+        FROM ${CH_MSG}.messages
         WHERE author_id IN (${inSql})
         GROUP BY author_id
       `,
@@ -92,8 +119,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
   router.get('/ch/tables', async (_req: Request, res: Response) => {
     try {
       const r = await ch.query({
-        query: `SELECT name, engine, total_rows FROM system.tables WHERE database = {db:String} ORDER BY total_rows DESC`,
-        query_params: { db: CH_DB },
+        query: `SELECT database, name, engine, total_rows FROM system.tables WHERE database IN ('senneo_messages','senneo_users','senneo_analytics','senneo_operations') ORDER BY database, total_rows DESC`,
         format: 'JSONEachRow',
       });
       return res.json(await r.json());
@@ -107,8 +133,9 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
     const limit  = Math.min(parseInt(req.query['limit'] as string ?? '50'), 500);
     const offset = parseInt(req.query['offset'] as string ?? '0', 10);
     try {
+      const tableDb = resolveTableDb(req.params.table);
       const r = await ch.query({
-        query: `SELECT * FROM ${CH_DB}.${req.params.table} LIMIT {limit:UInt32} OFFSET {offset:UInt32}`,
+        query: `SELECT * FROM ${tableDb}.${req.params.table} LIMIT {limit:UInt32} OFFSET {offset:UInt32}`,
         query_params: { limit, offset },
         format: 'JSONEachRow',
       });
@@ -146,7 +173,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
                        argMax(is_bot, ts) AS is_bot, groupBitOr(badge_mask) AS badge_mask,
                        argMaxIf(author_avatar, ts, author_avatar != '' AND author_avatar != '0') AS author_avatar, argMax(display_name, ts) AS display_name,
                        min(ts) AS first_seen
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE ts >= now() - INTERVAL 90 DAY ${botFilter}
                 GROUP BY author_id, author_name
                 ORDER BY msg_count DESC LIMIT {limit:UInt32}`,
@@ -165,7 +192,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
       const r = await ch.query({
         query: `SELECT channel_id, count() AS msg_count, uniq(author_id) AS unique_users,
                        min(ts) AS first_msg, max(ts) AS last_msg
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE ts >= now() - INTERVAL 90 DAY
                 GROUP BY channel_id
                 ORDER BY msg_count DESC LIMIT {limit:UInt32}`,
@@ -181,7 +208,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
     try {
       const r = await ch.query({
         query: `SELECT toDate(ts) AS date, count() AS messages, uniq(author_id) AS users
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE ts >= now() - INTERVAL {days:UInt32} DAY
                 GROUP BY date ORDER BY date ASC`,
         query_params: { days }, format: 'JSONEachRow',
@@ -195,7 +222,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
     try {
       const r = await ch.query({
         query: `SELECT toHour(ts) AS hour, count() AS messages
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE ts >= now() - INTERVAL 90 DAY
                 GROUP BY hour ORDER BY hour ASC`,
         format: 'JSONEachRow',
@@ -212,7 +239,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
     try {
       const r = await ch.query({
         query: `SELECT message_id, channel_id, author_id, author_name, content, ts
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE positionCaseInsensitive(content, {q:String}) > 0
                 ORDER BY ts DESC LIMIT {limit:UInt32}`,
         query_params: { q, limit }, format: 'JSONEachRow',
@@ -234,7 +261,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
                   countIf(embed_count > 0) AS with_embed,
                   countIf(length(sticker_names) > 0) AS with_sticker,
                   count() AS total
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE ts >= now() - INTERVAL {days:UInt32} DAY`,
         query_params: { days }, format: 'JSONEachRow',
         clickhouse_settings: CH_QUERY_SAFETY,
@@ -250,7 +277,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
     try {
       const r = await ch.query({
         query: `SELECT media_type, count() AS cnt
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE ts >= now() - INTERVAL {days:UInt32} DAY
                 GROUP BY media_type
                 ORDER BY cnt DESC`,
@@ -273,7 +300,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
                   max(length(content)) AS max_chars,
                   countIf(length(content) = 0) AS empty_count,
                   count() AS total
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE ts >= now() - INTERVAL {days:UInt32} DAY`,
         query_params: { days }, format: 'JSONEachRow',
         clickhouse_settings: CH_QUERY_SAFETY,
@@ -297,7 +324,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
         const r = await ch.query({
           query: `SELECT author_id, author_name, badge_mask, last_seen_ts, sample_guild,
                          author_avatar, is_bot, display_name
-                  FROM ${CH_DB}.users_latest FINAL
+                  FROM ${CH_USR}.users_latest FINAL
                   WHERE author_id = {authorId:UInt64}`,
           query_params: { authorId },
           format: 'JSONEachRow',
@@ -310,7 +337,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
           query: `SELECT count() AS msg_count, min(ts) AS first_seen, max(ts) AS last_seen,
                          argMaxIf(author_avatar, ts, author_avatar != '') AS best_avatar_from_msgs,
                          groupBitOr(badge_mask) AS badge_mask_agg
-                  FROM ${CH_DB}.messages WHERE author_id = {authorId:UInt64}`,
+                  FROM ${CH_MSG}.messages WHERE author_id = {authorId:UInt64}`,
           query_params: { authorId },
           format: 'JSONEachRow',
           clickhouse_settings: CH_QUERY_SAFETY,
@@ -334,7 +361,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
         const r = await ch.query({
           query: `SELECT author_id, author_name, badge_mask, last_seen_ts, sample_guild,
                          author_avatar, is_bot, display_name
-                  FROM ${CH_DB}.users_latest FINAL
+                  FROM ${CH_USR}.users_latest FINAL
                   WHERE positionCaseInsensitive(author_name, {name:String}) > 0
                   ORDER BY last_seen_ts DESC LIMIT {limit:UInt32}`,
           query_params: { name, limit },
@@ -362,7 +389,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
       const fieldFilter = field ? 'AND field = {field:String}' : '';
       const r = await ch.query({
         query: `SELECT author_id, field, value, observed_ts, guild_id, source_msg_ts
-                FROM ${CH_DB}.user_identity_log FINAL
+                FROM ${CH_USR}.user_identity_log FINAL
                 WHERE author_id = {authorId:UInt64} ${fieldFilter}
                 ORDER BY field, observed_ts DESC
                 LIMIT {limit:UInt32}`,
@@ -381,7 +408,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
     try {
       const r = await ch.query({
         query: `SELECT toDayOfWeek(ts) AS dow, toHour(ts) AS hour, count() AS cnt
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE ts >= now() - INTERVAL {days:UInt32} DAY
                 GROUP BY dow, hour ORDER BY dow, hour`,
         query_params: { days }, format: 'JSONEachRow',
@@ -397,7 +424,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
     try {
       const r = await ch.query({
         query: `SELECT toMonday(ts) AS week, count() AS messages, uniq(author_id) AS authors
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE ts >= now() - INTERVAL {weeks:UInt32} WEEK
                 GROUP BY week ORDER BY week ASC`,
         query_params: { weeks }, format: 'JSONEachRow',
@@ -416,7 +443,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
     try {
       const r = await ch.query({
         query: `SELECT toHour(ts) AS hour, count() AS messages, uniq(author_id) AS authors
-                FROM ${CH_DB}.messages
+                FROM ${CH_MSG}.messages
                 WHERE channel_id = {cid:UInt64} AND ts >= now() - INTERVAL {days:UInt32} DAY
                 GROUP BY hour ORDER BY hour`,
         query_params: { cid: channelId, days }, format: 'JSONEachRow',
@@ -435,18 +462,18 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
           query: `SELECT count() AS total_messages, uniq(author_id) AS unique_authors,
                          uniq(channel_id) AS unique_channels, uniq(guild_id) AS unique_guilds,
                          min(ts) AS oldest, max(ts) AS newest
-                  FROM ${CH_DB}.messages WHERE ts >= now() - INTERVAL {days:UInt32} DAY`,
+                  FROM ${CH_MSG}.messages WHERE ts >= now() - INTERVAL {days:UInt32} DAY`,
           query_params: { days }, format: 'JSONEachRow', clickhouse_settings: CH_QUERY_SAFETY,
         }),
         ch.query({
           query: `SELECT toDate(ts) AS date, count() AS messages, uniq(author_id) AS authors
-                  FROM ${CH_DB}.messages WHERE ts >= now() - INTERVAL {days:UInt32} DAY
+                  FROM ${CH_MSG}.messages WHERE ts >= now() - INTERVAL {days:UInt32} DAY
                   GROUP BY date ORDER BY date ASC`,
           query_params: { days }, format: 'JSONEachRow', clickhouse_settings: CH_QUERY_SAFETY,
         }),
         ch.query({
           query: `SELECT toHour(ts) AS hour, count() AS messages
-                  FROM ${CH_DB}.messages WHERE ts >= now() - INTERVAL {days:UInt32} DAY
+                  FROM ${CH_MSG}.messages WHERE ts >= now() - INTERVAL {days:UInt32} DAY
                   GROUP BY hour ORDER BY hour ASC`,
           query_params: { days }, format: 'JSONEachRow', clickhouse_settings: CH_QUERY_SAFETY,
         }),
@@ -456,7 +483,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
                     countIf(has_attachment = 1) AS with_attachment,
                     countIf(embed_count > 0) AS with_embed,
                     count() AS total
-                  FROM ${CH_DB}.messages WHERE ts >= now() - INTERVAL {days:UInt32} DAY`,
+                  FROM ${CH_MSG}.messages WHERE ts >= now() - INTERVAL {days:UInt32} DAY`,
           query_params: { days }, format: 'JSONEachRow', clickhouse_settings: CH_QUERY_SAFETY,
         }),
       ]);
@@ -480,7 +507,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
             countDistinct(message_id)                     AS unique_ids,
             count() - countDistinct(message_id)           AS duplicate_rows,
             round((count() - countDistinct(message_id)) * 100.0 / greatest(count(), 1), 4) AS duplicate_pct
-          FROM ${CH_DB}.messages
+          FROM ${CH_MSG}.messages
         `,
         format: 'JSONEachRow',
         clickhouse_settings: { max_execution_time: 60 },
@@ -524,14 +551,14 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
         // OPTIMIZE TABLE FINAL loads ALL partitions into RAM simultaneously → OOM kill on 110M rows.
         // Per-partition approach processes one month at a time — predictable, low memory usage.
         const partResult = await ch.query({
-          query: `SELECT DISTINCT partition FROM system.parts WHERE database='${CH_DB}' AND table='messages' AND active=1 ORDER BY partition`,
+          query: `SELECT DISTINCT partition FROM system.parts WHERE database='${CH_MSG}' AND table='messages' AND active=1 ORDER BY partition`,
           format: 'JSONEachRow',
           clickhouse_settings: { max_execution_time: 30 },
         });
         const partRows = await partResult.json<{ partition: string }[]>();
         for (const { partition } of partRows) {
           await ch.command({
-            query: `OPTIMIZE TABLE ${CH_DB}.messages PARTITION '${partition}' DEDUPLICATE BY guild_id, channel_id, ts, message_id`,
+            query: `OPTIMIZE TABLE ${CH_MSG}.messages PARTITION '${partition}' DEDUPLICATE BY guild_id, channel_id, ts, message_id`,
             clickhouse_settings: { max_execution_time: 300 },
           }).catch((e: unknown) => console.warn(`[dedup] partition ${partition} skip:`, (e as Error)?.message?.slice(0, 80)));
         }
@@ -539,15 +566,15 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
         // Step 2: Lightweight DELETE for same message_id with different ts/guild_id
         await ch.command({
           query: `
-            ALTER TABLE ${CH_DB}.messages
+            ALTER TABLE ${CH_MSG}.messages
             DELETE WHERE (message_id, inserted_at) NOT IN (
               SELECT message_id, max(inserted_at)
-              FROM ${CH_DB}.messages
+              FROM ${CH_MSG}.messages
               GROUP BY message_id
               HAVING count() > 1
             )
             AND message_id IN (
-              SELECT message_id FROM ${CH_DB}.messages
+              SELECT message_id FROM ${CH_MSG}.messages
               GROUP BY message_id HAVING count() > 1
             )
           `,
@@ -558,7 +585,7 @@ export function dbRouter(scylla: CassandraClient, ch: ClickHouseClient): Router 
         }).catch(() => {});
 
         const r = await ch.query({
-          query: `SELECT count() AS total_rows, countDistinct(message_id) AS unique_ids FROM ${CH_DB}.messages`,
+          query: `SELECT count() AS total_rows, countDistinct(message_id) AS unique_ids FROM ${CH_MSG}.messages`,
           format: 'JSONEachRow',
           clickhouse_settings: { max_execution_time: 60 },
         });

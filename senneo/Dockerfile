@@ -10,7 +10,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── Stage 1: Base — install dependencies + build all ──────────────────────────
-FROM node:18-alpine AS base
+FROM node:20-alpine AS base
 WORKDIR /app
 
 # Root package.json + workspace configs
@@ -33,7 +33,7 @@ COPY packages/ packages/
 RUN npm run build 2>/dev/null || (cd packages/shared && npx tsc -b && cd ../bot && npx tsc -b && cd ../ingester && npx tsc -b && cd ../api && npx tsc -b && cd ../accounts && npx tsc -b)
 
 # ── Stage 2: Bot ──────────────────────────────────────────────────────────────
-FROM node:18-alpine AS bot
+FROM node:20-alpine AS bot
 WORKDIR /app
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/packages/shared/dist ./packages/shared/dist
@@ -44,7 +44,7 @@ COPY --from=base /app/package.json ./
 CMD ["node", "-r", "dotenv/config", "packages/bot/dist/index.js"]
 
 # ── Stage 3: Ingester ────────────────────────────────────────────────────────
-FROM node:18-alpine AS ingester
+FROM node:20-alpine AS ingester
 WORKDIR /app
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/packages/shared/dist ./packages/shared/dist
@@ -55,7 +55,7 @@ COPY --from=base /app/package.json ./
 CMD ["node", "-r", "dotenv/config", "packages/ingester/dist/index.js"]
 
 # ── Stage 4: API ──────────────────────────────────────────────────────────────
-FROM node:18-alpine AS api
+FROM node:20-alpine AS api
 WORKDIR /app
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/packages/shared/dist ./packages/shared/dist
@@ -68,7 +68,7 @@ EXPOSE 4000
 CMD ["node", "-r", "dotenv/config", "packages/api/dist/index.js"]
 
 # ── Stage 5: Accounts ────────────────────────────────────────────────────────
-FROM node:18-alpine AS accounts
+FROM node:20-alpine AS accounts
 WORKDIR /app
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/packages/shared/dist ./packages/shared/dist

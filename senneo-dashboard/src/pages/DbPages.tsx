@@ -100,7 +100,7 @@ function DbExplorer({engine}:{engine:"ch"|"scylla"}){
   const [qLoad,setQLoad]=useState(false);
   const [qErr,setQErr]=useState("");
   const [ms,setMs]=useState<number|null>(null);
-  const {data:tables}=useFetch<{name:string;total_rows?:number}[]>(isCh?()=>api.db.ch.tables() as Promise<{name:string;total_rows?:number}[]>:()=>api.db.scylla.tables() as Promise<{name:string}[]>);
+  const {data:tables}=useFetch<any[]>(isCh?()=>api.db.ch.tables() as Promise<any[]>:()=>api.db.scylla.tables() as Promise<any[]>);
   async function selTable(name:string){setActive(name);setTLoad(true);try{if(isCh){setTRows(await api.db.ch.rows(name,50,0) as Record<string,unknown>[]);}else{const r=await api.db.scylla.query(`SELECT * FROM senneo.${name} LIMIT 50`) as {rows:Record<string,unknown>[]};setTRows(r.rows??[]);}}catch{setTRows([]);}finally{setTLoad(false);}}
   async function runQ(){if(!query.trim())return;setQLoad(true);setQErr("");setMs(null);const t=Date.now();try{let rows:Record<string,unknown>[]=[];if(isCh){const r=await api.db.ch.query(query) as {rows:Record<string,unknown>[];elapsedMs:number;error?:string};if(r.error){setQErr(r.error);return;}rows=r.rows;setMs(r.elapsedMs);}else{const r=await api.db.scylla.query(query) as {rows:Record<string,unknown>[];error?:string};if(r.error){setQErr(r.error);return;}rows=r.rows;setMs(Date.now()-t);}setQRows(rows);}catch(e){setQErr((e as Error).message);}finally{setQLoad(false);}}
   return(
@@ -110,7 +110,7 @@ function DbExplorer({engine}:{engine:"ch"|"scylla"}){
         {!tables?<div className="empty" style={{height:60}}><Spinner/></div>:tables.map(t=>(
           <div key={t.name} className={`tree-table${active===t.name?" active":""}`} onClick={()=>selTable(t.name)}>
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="1" y="1" width="10" height="10" rx="1.5"/><path d="M1 4h10M4 1v10"/></svg>
-            {t.name}
+            {isCh&&'database' in t?<><span style={{fontSize:10,opacity:0.6}}>{t.database}.</span>{t.name}</>:t.name}
             {t.total_rows!=null&&<span className="tree-rows">{Number(t.total_rows).toLocaleString()}</span>}
           </div>))}
       </div>

@@ -1,18 +1,18 @@
 async function get<T>(path: string): Promise<T> {
-  const r = await fetch(path); if (!r.ok) throw new Error(`HTTP ${r.status}: ${path}`); return r.json();
+  const r = await fetch(path, { credentials: "include" }); if (!r.ok) throw new Error(`HTTP ${r.status}: ${path}`); return r.json();
 }
 async function post<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body), credentials: "include" });
   if (!r.ok) { const err = await r.json().catch(() => ({ error: r.statusText })); throw new Error((err as any).error ?? r.statusText); }
   return r.json();
 }
 async function put<T>(path: string, body: unknown): Promise<T> {
-  const r = await fetch(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const r = await fetch(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "include" });
   if (!r.ok) { const err = await r.json().catch(() => ({ error: r.statusText })); throw new Error((err as any).error ?? r.statusText); }
   return r.json();
 }
 async function del<T>(path: string): Promise<T> {
-  const r = await fetch(path, { method: "DELETE" }); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json();
+  const r = await fetch(path, { method: "DELETE", credentials: "include" }); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json();
 }
 
 export const api = {

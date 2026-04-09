@@ -22,7 +22,7 @@ const KEYSPACE     = process.env.SCYLLA_KEYSPACE        ?? 'senneo';
 const SCYLLA_HOSTS = (process.env.SCYLLA_HOSTS          ?? 'localhost').split(',');
 const CH_HOST      = process.env.CLICKHOUSE_HOST        ?? 'localhost';
 const CH_PORT      = process.env.CLICKHOUSE_PORT        ?? '8123';
-const CH_DB        = process.env.CLICKHOUSE_DB          ?? 'senneo';
+const CH_DB        = process.env.CLICKHOUSE_DB          ?? 'senneo_messages';
 const KAFKA_BROKERS = (process.env.KAFKA_BROKERS        ?? 'localhost:9092').split(',');
 
 async function main(): Promise<void> {
