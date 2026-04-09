@@ -859,6 +859,33 @@ async function main(): Promise<void> {
           withSchedulerLock(() => syncTargets(undefined, controlOverlay)).catch(() => {});
         });
       }
+    } else if (result.kind === 'yield') {
+      // Time-slicing: Channel yielded after MAX_BATCHES_PER_RUN - re-queue for fair scheduling
+      enqueued.delete(target.channelId);
+      trackedTargetState.delete(target.channelId);
+      channelRunToken.delete(target.channelId);
+      
+      // Mark as queued again for immediate re-processing
+      writeRuntimeState(target, 'queued', {
+        accountId: accId,
+        stateReason: `Yielded for fair scheduling - ${result.reason ?? 'time slice complete'}`,
+      });
+      
+      // Emit yield event
+      emit('info', `${target.channelId} re-queued`, { 
+        accountId: accId, 
+        channelId: target.channelId, 
+        guildId: target.guildId, 
+        detail: `totalScraped=${result.totalScraped ?? 0} batches=${process.env.MAX_BATCHES_PER_RUN ?? 10}` 
+      });
+      
+      await flushStats().catch(() => {});
+      
+      // Re-enqueue the channel immediately - it will go to the back of the queue
+      // giving other channels a chance to run (RoundRobin-style fair scheduling)
+      setImmediate(() => {
+        enqueueChannel(target, accId, controlOverlay);
+      });
     } else if (result.kind === 'noop' && result.code === 'empty_channel') {
       writeRuntimeState(target, 'completed', { accountId: accId, stateReason: result.reason ?? 'channel is empty' });
       await flushStats().catch(() => {});

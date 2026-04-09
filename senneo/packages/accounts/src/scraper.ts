@@ -21,6 +21,10 @@ const ADAPTIVE_STEP_DOWN_MS  = parseInt(process.env.ADAPTIVE_STEP_DOWN_MS      ?
 const ADAPTIVE_MIN_MS        = parseInt(process.env.ADAPTIVE_MIN_MS            ?? '120',  10); // Plan safe=120ms (was 100)
 const ADAPTIVE_MAX_MS        = parseInt(process.env.ADAPTIVE_MAX_MS            ?? '2000', 10);
 
+// Time-slicing: Max batches per run before yielding to other channels (RoundRobin-style fair scheduling)
+// Default 10 batches = 1000 messages per slice, then re-queue. Set to 0 to disable (continuous run).
+const MAX_BATCHES_PER_RUN    = parseInt(process.env.MAX_BATCHES_PER_RUN        ?? '10',   10);
+
 const ABORTABLE_WAIT_ENABLED  = (() => {
   const raw = process.env.SCRAPER_ABORTABLE_WAIT_ENABLED;
   if (raw == null) return true;
@@ -144,9 +148,10 @@ function backoffMs(attempt: number): number {
 }
 
 export interface ScrapeChannelResult {
-  kind: 'completed' | 'aborted' | 'error_retryable' | 'error_terminal' | 'noop';
+  kind: 'completed' | 'aborted' | 'error_retryable' | 'error_terminal' | 'noop' | 'yield';
   reason?: string;
   code?: string;
+  totalScraped?: number;  // For yield: track progress
 }
 
 export interface ScrapeRateLimitEvent {
@@ -241,7 +246,11 @@ export async function scrapeChannel(
   let pendingFetch: Promise<{ messages: Map<string, DiscordMessage> | null; result?: ScrapeChannelResult }> | null = null;
   let exit: ScrapeChannelResult = { kind: 'noop', code: 'stopped', reason: 'scrape loop exited' };
 
-  console.log(`[scraper] ${channelId} | cursor=${cursor} | scraped=${totalScraped} | delay=${adaptiveDelay}ms`);
+  // Time-slicing: Track batches processed in this run for RoundRobin-style fair scheduling
+  let batchesProcessedThisRun = 0;
+  const maxBatchesPerRun = MAX_BATCHES_PER_RUN > 0 ? MAX_BATCHES_PER_RUN : Infinity;
+
+  console.log(`[scraper] ${channelId} | cursor=${cursor} | scraped=${totalScraped} | delay=${adaptiveDelay}ms | maxBatches=${maxBatchesPerRun === Infinity ? '∞' : maxBatchesPerRun}`);
   emit('scrape_start', `${channelId} scrape baslatildi`, { channelId, guildId, detail: `cursor=${cursor} scraped=${totalScraped}` });
 
   const fetchBatch = async (beforeCursor: string | null): Promise<{ messages: Map<string, DiscordMessage> | null; result?: ScrapeChannelResult }> => {
@@ -391,8 +400,29 @@ export async function scrapeChannel(
 
     adaptiveDelay = Math.max(adaptiveDelay - ADAPTIVE_STEP_DOWN_MS, ADAPTIVE_MIN_MS);
 
+    // Time-slicing: Increment batch counter
+    batchesProcessedThisRun++;
+
+    // Check if we've reached the batch limit for this run (RoundRobin-style fair scheduling)
+    if (batchesProcessedThisRun >= maxBatchesPerRun && maxBatchesPerRun !== Infinity) {
+      console.log(`[scraper] ${channelId} | yield after ${batchesProcessedThisRun} batches (${totalScraped.toLocaleString()} msgs) - re-queueing for fair scheduling`);
+      emit('info', `${channelId} yielding`, { channelId, guildId, detail: `batches=${batchesProcessedThisRun} scraped=${totalScraped}` });
+      
+      // Flush any pending delivery before yielding
+      await (pendingDelivery as Promise<void> | null)?.catch(() => {});
+      
+      // Return yield result with progress
+      exit = { 
+        kind: 'yield', 
+        code: 'max_batches_reached', 
+        reason: `Yielded after ${batchesProcessedThisRun} batches for fair scheduling`,
+        totalScraped
+      };
+      break;
+    }
+
     if (totalScraped % 10_000 === 0 && totalScraped > 0)
-      console.log(`[scraper] ${channelId} | total=${totalScraped.toLocaleString()} | delay=${adaptiveDelay}ms`);
+      console.log(`[scraper] ${channelId} | total=${totalScraped.toLocaleString()} | delay=${adaptiveDelay}ms | batches=${batchesProcessedThisRun}/${maxBatchesPerRun === Infinity ? '∞' : maxBatchesPerRun}`);
 
     if (!(await waitFor(adaptiveDelay, signal))) {
       exit = { kind: 'aborted', code: 'abort_signal', reason: 'abort signal received' };

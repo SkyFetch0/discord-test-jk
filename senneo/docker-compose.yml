@@ -352,13 +352,14 @@ services:
       - CLICKHOUSE_DB=${CLICKHOUSE_DB:-senneo_messages}
       - SCYLLA_HOSTS=scylla
       - SCYLLA_KEYSPACE=${SCYLLA_KEYSPACE:-senneo}
-      # Scraper Configuration - 80 msg/s per channel (1250ms for 100 msg batch)
+      # Scraper Configuration - 100 msg/s per channel with time-slicing
       - CONCURRENT_GUILDS=5
       - SCRAPE_BATCH_SIZE=100
-      - FETCH_DELAY_MS=1250
-      - ADAPTIVE_MIN_MS=1250
-      - ADAPTIVE_MAX_MS=1250
+      - FETCH_DELAY_MS=10
+      - ADAPTIVE_MIN_MS=10
+      - ADAPTIVE_MAX_MS=2000
       - RATE_LIMIT_COOLDOWN_MS=10000
+      - MAX_BATCHES_PER_RUN=50
       # Worker Configuration
       - SCRAPER_WORKER_ID=${SCRAPER_WORKER_ID:-accounts-1}
       - LOGIN_CONCURRENCY=${LOGIN_CONCURRENCY:-10}
