@@ -1,0 +1,1 @@
+{"version":3,"file":"scylla.d.ts","sourceRoot":"","sources":["../src/scylla.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,MAAM,IAAI,eAAe,EAA2B,MAAM,kBAAkB,CAAC;AACtF,OAAO,EAAE,UAAU,EAAgB,MAAM,gBAAgB,CAAC;AAe1D,wBAAsB,kBAAkB,IAAI,OAAO,CAAC,eAAe,CAAC,CAuBnE;AAmGD,wBAAsB,aAAa,CACjC,MAAM,EAAI,eAAe,EACzB,QAAQ,EAAE,UAAU,EAAE,GACrB,OAAO,CAAC,IAAI,CAAC,CAyDf"}

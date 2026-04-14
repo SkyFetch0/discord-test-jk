@@ -1,6 +1,0 @@
-node_modules/
-dist/
-.env
-accounts.json
-scraped_checkpoints.json
-*.js.map

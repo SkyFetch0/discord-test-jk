@@ -1,0 +1,1 @@
+{"version":3,"file":"health.d.ts","sourceRoot":"","sources":["../../src/routes/health.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,MAAM,EAAqB,MAAM,SAAS,CAAC;AACpD,OAAO,EAAE,MAAM,IAAI,eAAe,EAAE,MAAM,kBAAkB,CAAC;AAC7D,OAAO,EAAE,gBAAgB,EAAE,MAAM,oBAAoB,CAAC;AA4CtD,wBAAgB,YAAY,CAC1B,MAAM,EAAG,eAAe,EACxB,EAAE,EAAO,gBAAgB,EACzB,OAAO,EAAE,MAAM,EAAE,GAChB,MAAM,CA0BR"}

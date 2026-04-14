@@ -1,0 +1,47 @@
+{
+  "1307528453079171122": {
+    "guildId": "727881213406347282",
+    "channelId": "1307528453079171122",
+    "newestMessageId": "1484720108357161160",
+    "cursorId": "1483788616034549970",
+    "totalScraped": 91300,
+    "complete": false,
+    "lastScrapedAt": "2026-03-21T02:16:56.871Z"
+  },
+  "361511298451767297": {
+    "guildId": "319560327719026709",
+    "channelId": "361511298451767297",
+    "newestMessageId": "1484720145392996585",
+    "cursorId": "1484144099778101279",
+    "totalScraped": 91100,
+    "complete": false,
+    "lastScrapedAt": "2026-03-21T02:16:57.260Z"
+  },
+  "549474735684059136": {
+    "guildId": "549470467522560011",
+    "channelId": "549474735684059136",
+    "newestMessageId": "1484719646060839002",
+    "cursorId": "1483243064901238825",
+    "totalScraped": 90900,
+    "complete": false,
+    "lastScrapedAt": "2026-03-21T02:16:55.402Z"
+  },
+  "679877028991860876": {
+    "guildId": "679875946597056683",
+    "channelId": "679877028991860876",
+    "newestMessageId": "1484720134206656532",
+    "cursorId": "1483212636324761654",
+    "totalScraped": 90500,
+    "complete": false,
+    "lastScrapedAt": "2026-03-21T02:16:56.046Z"
+  },
+  "404440555355897879": {
+    "guildId": "125440014904590336",
+    "channelId": "404440555355897879",
+    "newestMessageId": "1484720147355795558",
+    "cursorId": "1483212887056191668",
+    "totalScraped": 90300,
+    "complete": false,
+    "lastScrapedAt": "2026-03-21T02:16:56.434Z"
+  }
+}

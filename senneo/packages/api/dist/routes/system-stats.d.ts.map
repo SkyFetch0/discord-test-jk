@@ -1,0 +1,1 @@
+{"version":3,"file":"system-stats.d.ts","sourceRoot":"","sources":["../../src/routes/system-stats.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,MAAM,EAAqB,MAAM,SAAS,CAAC;AACpD,OAAO,EAAE,MAAM,IAAI,eAAe,EAAE,MAAM,kBAAkB,CAAC;AAC7D,OAAO,EAAE,gBAAgB,EAAE,MAAM,oBAAoB,CAAC;AAYtD,wBAAgB,iBAAiB,CAC/B,MAAM,EAAG,eAAe,EACxB,EAAE,EAAO,gBAAgB,EACzB,OAAO,EAAE,MAAM,EAAE,GAChB,MAAM,CAmMR"}
