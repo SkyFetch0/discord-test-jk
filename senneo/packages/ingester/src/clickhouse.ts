@@ -6,7 +6,13 @@ const CH_PORT = process.env.CLICKHOUSE_PORT ?? '8123';
 const CH_DB   = process.env.CLICKHOUSE_DB   ?? 'senneo_messages';
 
 function toChTs(iso: string): string {
-  return iso.replace('T', ' ').replace('Z', '');
+  // Normalize ISO timestamps to ClickHouse format: "2024-01-15 12:30:45.123"
+  // Handles both "Z" suffix and "+00:00" / "+HH:MM" timezone offsets
+  // Raw HTTP Discord API returns "+00:00", discord.js returns "Z"
+  return iso
+    .replace('T', ' ')
+    .replace('Z', '')
+    .replace(/[+-]\d{2}:\d{2}$/, '');
 }
 
 export async function createClickHouseClient(): Promise<ClickHouseClient> {

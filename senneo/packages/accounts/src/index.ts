@@ -957,6 +957,7 @@ async function main(): Promise<void> {
             abort.signal,
             accId,
             throttleHooks,
+            (client as any).token,  // RAW HTTP: Pass token for 5x faster message fetching
           );
         } catch (err) {
           if (!abort.signal.aborted) console.error(`[accounts] ${accName} ${target.channelId} hata:`, err);

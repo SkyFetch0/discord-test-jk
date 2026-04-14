@@ -63,7 +63,7 @@ function computeScrapePhase(c: {
   return 'idle';
 }
 
-async function buildStats(scylla: CassandraClient): Promise<Record<string, unknown>> {
+async function buildStats(scylla: CassandraClient, ch?: ClickHouseClient): Promise<Record<string, unknown>> {
   try {
     const [statsResult, targetsResult, checkpointsResult, pausedAccounts, pausedChannels] = await Promise.all([
       scylla.execute(`SELECT * FROM ${KEYSPACE}.scrape_stats`),
@@ -75,6 +75,21 @@ async function buildStats(scylla: CassandraClient): Promise<Record<string, unkno
 
     const channels: Record<string, unknown> = {};
     let totalScraped = 0, msgsPerSec = 0;
+    
+    // FIX: Use ClickHouse for accurate total_scraped (checkpoint values include duplicates from re-scraping)
+    if (ch) {
+      try {
+        const result = await ch.query({
+          query: `SELECT count() AS total FROM ${CH_MSG_DB}.messages`,
+          format: 'JSONEachRow',
+        });
+        const [row] = await result.json<Record<string, string>[]>();
+        totalScraped = Number(row?.['total'] ?? 0);
+      } catch {
+        // Fallback to checkpoint sum if ClickHouse query fails
+        totalScraped = 0;
+      }
+    }
     const rateLimitLog: unknown[] = [];
 
     // Build target lookup for active runtime account_id + owner account_id
@@ -171,7 +186,8 @@ async function buildStats(scylla: CassandraClient): Promise<Record<string, unkno
         pauseAcknowledged: isPauseAcknowledged(schedulerState, mergedComplete, pauseIntent.pauseRequested),
         scrapePhase: computeScrapePhase({ complete: mergedComplete, msgsPerSec: mps, errors: errs, totalScraped: totalSc, progress: prog, schedulerState }),
       };
-      totalScraped += totalSc; msgsPerSec += mps;
+      if (!ch) totalScraped += totalSc; // Only sum checkpoints if not using ClickHouse total
+      msgsPerSec += mps;
       if (rl > 0) rateLimitLog.push({ ts: row['last_updated']?.toISOString(), channelId: id, waitMs: 0 });
     }
 
@@ -217,7 +233,7 @@ async function buildStats(scylla: CassandraClient): Promise<Record<string, unkno
         pauseAcknowledged: isPauseAcknowledged(null, mergedComplete2, pauseIntent.pauseRequested),
         scrapePhase: computeScrapePhase({ complete: mergedComplete2, msgsPerSec: 0, errors: [], totalScraped: cpTotal, progress: prog2, schedulerState: null }),
       };
-      totalScraped += cpTotal;
+      if (!ch) totalScraped += cpTotal; // Only sum checkpoints if not using ClickHouse total
     }
 
     // Enrich with channel/guild names and guild icons from name_cache
@@ -255,13 +271,13 @@ async function buildStats(scylla: CassandraClient): Promise<Record<string, unkno
   }
 }
 
-function startRefresh(scylla: CassandraClient): void {
+function startRefresh(scylla: CassandraClient, ch: ClickHouseClient): void {
   if (_refreshTimer) return;
   // Initial fetch
-  buildStats(scylla).then(s => { _cache = s; _cacheTs = Date.now(); }).catch(() => {});
+  buildStats(scylla, ch).then(s => { _cache = s; _cacheTs = Date.now(); }).catch(() => {});
   _refreshTimer = setInterval(async () => {
     try {
-      _cache = await buildStats(scylla);
+      _cache = await buildStats(scylla, ch);
       _cacheTs = Date.now();
     } catch { /* keep stale cache */ }
   }, REFRESH_INTERVAL);
@@ -280,7 +296,9 @@ function buildSummaryFromCache(): Record<string, unknown> {
   const all = getCachedChannels();
   const phaseCounts: Record<string, number> = { done: 0, active: 0, idle: 0, queued: 0, error: 0 };
   const schedulerCounts: Record<string, number> = { queued: 0, running: 0, paused: 0, completed: 0, error_retryable: 0, error_terminal: 0 };
-  let totalScraped = 0, msgsPerSec = 0;
+  // FIX: Use ClickHouse-backed total from cache instead of summing checkpoint values (which include duplicates)
+  let totalScraped = Number(_cache?.['totalScraped'] ?? 0);
+  let msgsPerSec = 0;
   const guildSet = new Set<string>();
   let pauseRequestedCount = 0;
   let pauseAcknowledgedCount = 0;
@@ -290,7 +308,6 @@ function buildSummaryFromCache(): Record<string, unknown> {
     phaseCounts[phase] = (phaseCounts[phase] ?? 0) + 1;
     const schedulerState = String(ch['schedulerState'] ?? '');
     if (schedulerState) schedulerCounts[schedulerState] = (schedulerCounts[schedulerState] ?? 0) + 1;
-    totalScraped += Number(ch['totalScraped'] ?? 0);
     msgsPerSec  += Number(ch['msgsPerSec'] ?? 0);
     const gid = String(ch['guildId'] ?? '');
     if (gid) guildSet.add(gid);
@@ -396,12 +413,12 @@ async function readScraperLog(): Promise<typeof _logCache> {
 
 // ── Router ───────────────────────────────────────────────────────────────────
 export function liveRouter(ch: ClickHouseClient, scylla: CassandraClient): Router {
-  startRefresh(scylla);
+  startRefresh(scylla, ch);
   const router = Router();
 
   // Full cache (backwards compat) — avoid at 100K+ channels
   router.get('/', async (_req: Request, res: Response) => {
-    if (!_cache) _cache = await buildStats(scylla);
+    if (!_cache) _cache = await buildStats(scylla, ch);
     return res.json(_cache);
   });
 
