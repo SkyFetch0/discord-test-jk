@@ -1,4 +1,4 @@
-# ┌──────────────────────────────────────────────────────────────────────────────┐
+﻿# ┌──────────────────────────────────────────────────────────────────────────────┐
 # │  SENNEO — Full Stack Docker Compose                                         │
 # │  Tek komutla tüm sistemi ayağa kaldırır:                                   │
 # │    docker compose up -d                                                     │
@@ -338,6 +338,27 @@ services:
   # ════════════════════════════════════════════════════════════════════════════
   # Accounts — Discord scraper controller (multi-account)
   # ════════════════════════════════════════════════════════════════════════════
+
+  # ============================================================================
+  # sky-net-go — Golang Discord scraper -> Kafka -> ClickHouse
+  # Tokenlari: sky-net-go/tokens.json | Config: sky-net-go/config.json
+  # ============================================================================
+  sky-net-go:
+    build:
+      context: ../../sky-net-go
+      dockerfile: Dockerfile
+    container_name: senneo-sky-net-go
+    restart: unless-stopped
+    volumes:
+      - ../../sky-net-go/config.json:/app/config.json:ro
+      - ../../sky-net-go/tokens.json:/app/tokens.json:ro
+    environment:
+      - TZ=UTC
+    networks:
+      - senneo-net
+    depends_on:
+      redpanda:
+        condition: service_healthy
   accounts:
     build:
       context: .
