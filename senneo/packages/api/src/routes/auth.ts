@@ -59,8 +59,18 @@ function discordApiGet(endpoint: string, token: string): Promise<any> {
 
 async function verifyGuildMembership(token: string, guildId: string): Promise<boolean> {
   try {
-    const guild = await discordApiGet(`/guilds/${guildId}`, token);
-    return !!guild?.id;
+    // Selfbot token ile /guilds/{id} endpoint'i 403 verir (bot token gerektirir).
+    // Doğru yol: /users/@me/guilds listesinde guildId var mı kontrol et.
+    const guilds = await discordApiGet(`/users/@me/guilds?limit=200`, token) as Array<{ id: string }>;
+    if (Array.isArray(guilds) && guilds.some((g) => g.id === guildId)) return true;
+    // 200 guild limiti — kullanıcı 200'den fazla guild'deyse pagination gerekir.
+    // Pratik olarak nadir; ikinci sayfa da kontrol edilsin.
+    if (Array.isArray(guilds) && guilds.length === 200) {
+      const lastId = guilds[guilds.length - 1].id;
+      const guilds2 = await discordApiGet(`/users/@me/guilds?limit=200&after=${lastId}`, token) as Array<{ id: string }>;
+      if (Array.isArray(guilds2) && guilds2.some((g) => g.id === guildId)) return true;
+    }
+    return false;
   } catch {
     return false;
   }

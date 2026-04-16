@@ -317,6 +317,7 @@ services:
     volumes:
       - ./accounts.json:/app/accounts.json
       - ./proxies.json:/app/proxies.json
+      - ./proxy_runtime_state.json:/app/proxy_runtime_state.json
     environment:
       - PORT=4000
       - NODE_ENV=${NODE_ENV:-production}
