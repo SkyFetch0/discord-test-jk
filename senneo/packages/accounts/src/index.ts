@@ -958,6 +958,7 @@ async function main(): Promise<void> {
             accId,
             throttleHooks,
             (client as any).token,  // RAW HTTP: Pass token for 5x faster message fetching
+            accountAgents.get(accId)?.proxyUrl,  // RAW HTTP: Pass proxy URL so raw fetches go through proxy
           );
         } catch (err) {
           if (!abort.signal.aborted) console.error(`[accounts] ${accName} ${target.channelId} hata:`, err);

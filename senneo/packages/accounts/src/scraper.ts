@@ -232,20 +232,51 @@ async function rawFetchMessages(
   limit: number,
   beforeCursor: string | null,
   signal?: AbortSignal,
+  proxyUrl?: string,
 ): Promise<any[]> {
   const url = `${DISCORD_API_BASE}/channels/${channelId}/messages?limit=${limit}${beforeCursor ? `&before=${beforeCursor}` : ''}`;
 
-  const res = await fetch(url, {
-    signal,
-    headers: {
-      'Authorization': token,
-      'Content-Type': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    },
-  });
+  const headers = {
+    'Authorization': token,
+    'Content-Type': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  };
 
-  if (res.status === 429) {
-    const retryAfter = Number(res.headers.get('Retry-After') ?? '5');
+  let statusCode: number;
+  let bodyText: string;
+
+  if (proxyUrl) {
+    // Proxy varsa undici kullan — native fetch() proxy agent desteklemez.
+    const undici = await import('undici') as any;
+    const protocol = proxyUrl.startsWith('socks') ? 'socks' : 'http';
+    const dispatcher = protocol === 'socks'
+      ? new undici.SocksProxyAgent(proxyUrl)
+      : new undici.ProxyAgent(proxyUrl);
+    try {
+      const res = await undici.request(url, {
+        method: 'GET',
+        dispatcher,
+        headers,
+        headersTimeout: 15_000,
+        bodyTimeout: 15_000,
+        signal,
+      });
+      statusCode = res.statusCode;
+      bodyText = await res.body.text();
+    } finally {
+      await dispatcher?.close?.().catch(() => {});
+    }
+  } else {
+    // Proxy yoksa native fetch kullan
+    const res = await fetch(url, { signal, headers });
+    statusCode = res.status;
+    bodyText = await res.text();
+  }
+
+  if (statusCode === 429) {
+    // Retry-After header'ı undici'de farklı — body'den de okuyabiliriz
+    let retryAfter = 5;
+    try { retryAfter = JSON.parse(bodyText)?.retry_after ?? 5; } catch { /* ignore */ }
     const err: any = new Error(`Rate limited: retry after ${retryAfter}s`);
     err.status = 429;
     err.httpStatus = 429;
@@ -253,29 +284,28 @@ async function rawFetchMessages(
     throw err;
   }
 
-  if (res.status === 403) {
+  if (statusCode === 403) {
     const err: any = new Error('Forbidden (403)');
     err.status = 403;
     err.httpStatus = 403;
     throw err;
   }
 
-  if (res.status === 404) {
+  if (statusCode === 404) {
     const err: any = new Error('Not Found (404)');
     err.status = 404;
     err.httpStatus = 404;
     throw err;
   }
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    const err: any = new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
-    err.status = res.status;
-    err.httpStatus = res.status;
+  if (statusCode < 200 || statusCode >= 300) {
+    const err: any = new Error(`HTTP ${statusCode}: ${bodyText.slice(0, 200)}`);
+    err.status = statusCode;
+    err.httpStatus = statusCode;
     throw err;
   }
 
-  return res.json() as Promise<any[]>;
+  return JSON.parse(bodyText) as any[];
 }
 
 /**
@@ -396,7 +426,8 @@ export async function scrapeChannel(
   signal?:     AbortSignal,
   accountId?:  string,
   throttleHooks?: ScrapeThrottleHooks,
-  token?:      string,  // Discord bot token for raw HTTP fetching
+  token?:      string,  // Discord token for raw HTTP fetching
+  proxyUrl?:   string,  // Proxy URL for raw HTTP fetching (http/https/socks5)
 ): Promise<ScrapeChannelResult> {
   initChannel(channelId, guildId, accountId);
 
@@ -487,7 +518,7 @@ export async function scrapeChannel(
           return { rawMessages: null, result: { kind: 'aborted', code: 'abort_signal', reason: 'abort signal received' } };
         }
         // ── RAW HTTP: Direct fetch to Discord API v9 ──
-        rawMessages = await rawFetchMessages(token!, channelId, BATCH_SIZE, beforeCursor, signal);
+        rawMessages = await rawFetchMessages(token!, channelId, BATCH_SIZE, beforeCursor, signal, proxyUrl);
         break;
       } catch (err: unknown) {
         const e = err as any;
