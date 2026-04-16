@@ -1,4 +1,4 @@
-﻿# ┌──────────────────────────────────────────────────────────────────────────────┐
+# ┌──────────────────────────────────────────────────────────────────────────────┐
 # │  SENNEO — Full Stack Docker Compose                                         │
 # │  Tek komutla tüm sistemi ayağa kaldırır:                                   │
 # │    docker compose up -d                                                     │
@@ -255,6 +255,8 @@ services:
 
   # ════════════════════════════════════════════════════════════════════════════
   # Bot — Discord selfbot → Kafka producer (real-time messages)
+  # Opsiyonel servis — sadece BOT_TOKEN ayarlıysa başlatılmalı.
+  # Başlatmak için: docker compose --profile bot up -d
   # ════════════════════════════════════════════════════════════════════════════
   bot:
     build:
@@ -262,6 +264,8 @@ services:
       target: bot
     container_name: senneo-bot
     restart: unless-stopped
+    profiles:
+      - bot
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - KAFKA_BROKERS=redpanda:29092
@@ -311,7 +315,8 @@ services:
     ports:
       - "${API_PORT:-4000}:4000"
     volumes:
-      - ./accounts.json:/app/accounts.json:ro
+      - ./accounts.json:/app/accounts.json
+      - ./proxies.json:/app/proxies.json
     environment:
       - PORT=4000
       - NODE_ENV=${NODE_ENV:-production}
@@ -335,7 +340,50 @@ services:
       redpanda:
         condition: service_healthy
 
- 
+  # ════════════════════════════════════════════════════════════════════════════
+  # Accounts — Discord scraper controller (multi-account)
+  # ════════════════════════════════════════════════════════════════════════════
+  accounts:
+    build:
+      context: .
+      target: accounts
+    container_name: senneo-accounts
+    restart: unless-stopped
+    environment:
+      - KAFKA_BROKERS=redpanda:29092
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-messages}
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-senneo_messages}
+      - SCYLLA_HOSTS=scylla
+      - SCYLLA_KEYSPACE=${SCYLLA_KEYSPACE:-senneo}
+      # Scraper Configuration
+      - CONCURRENT_GUILDS=5
+      - SCRAPE_BATCH_SIZE=100
+      - FETCH_DELAY_MS=300
+      - ADAPTIVE_MIN_MS=120
+      - ADAPTIVE_MAX_MS=2000
+      - RATE_LIMIT_COOLDOWN_MS=10000
+      - MAX_BATCHES_PER_RUN=50
+      # Rate Limiter
+      - MAX_MSG_PER_SEC_CHANNEL=60
+      - MAX_MSG_PER_SEC_ACCOUNT=300
+      # Worker Configuration
+      - SCRAPER_WORKER_ID=${SCRAPER_WORKER_ID:-accounts-1}
+      - LOGIN_CONCURRENCY=${LOGIN_CONCURRENCY:-10}
+      - LOGIN_DELAY_MS=${LOGIN_DELAY_MS:-1500}
+    volumes:
+      - ./accounts.json:/app/accounts.json
+      - ./proxies.json:/app/proxies.json
+    networks:
+      - senneo-net
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      scylla:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
 
 # ════════════════════════════════════════════════════════════════════════════════
 # Named Volumes — Persist data across restarts

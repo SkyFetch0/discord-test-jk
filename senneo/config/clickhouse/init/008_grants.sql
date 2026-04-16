@@ -1,10 +1,19 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- 008_grants.sql — Kullanıcı Yetki Tanımları
+-- 008_grants.sql — Kullanıcı ve Yetki Tanımları
 -- Çalışma sırası: 8 (tablolar ve view'lar oluşturulduktan sonra)
 --
--- Kullanıcılar users.d/default.xml'de tanımlanmıştır.
--- Bu dosya sadece GRANT komutlarını içerir.
+-- NOT: Tüm servisler (ingester, api, dashboard) şu an default kullanıcısıyla
+-- bağlandığından bu GRANT'lar operasyonel olarak zorunlu değil.
+-- Yine de ilerideki multi-user setup için kullanıcıları oluşturuyoruz.
 -- ─────────────────────────────────────────────────────────────────────────────
+
+-- ═══════════════════════════════════════════════════════════════════
+-- Kullanıcıları oluştur (yoksa) — şifresiz, sadece iç ağdan erişim
+-- ═══════════════════════════════════════════════════════════════════
+CREATE USER IF NOT EXISTS senneo_ingester IDENTIFIED WITH no_password;
+CREATE USER IF NOT EXISTS senneo_api      IDENTIFIED WITH no_password;
+CREATE USER IF NOT EXISTS senneo_dashboard IDENTIFIED WITH no_password;
+
 
 -- ═══════════════════════════════════════════════════════════════════
 -- senneo_ingester — Kafka → ClickHouse ingester servisi

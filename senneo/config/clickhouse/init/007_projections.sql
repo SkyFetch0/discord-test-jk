@@ -8,11 +8,23 @@
 --   → Diğer sorgularda full scan gerekebilir
 -- Projeksiyonlar bu gap'leri kapatır.
 --
+-- ClickHouse 24.8 — ReplacingMergeTree + Projeksiyon uyumu:
+--   ReplacingMergeTree üzerinde projeksiyon kullanmak için
+--   deduplicate_merge_projection_mode = 'rebuild' gerekir.
+--   'throw' (default) açıkken ADD PROJECTION hata fırlatır.
+--
 -- NOT: MATERIALIZE komutu mevcut veriyi projeksiyon formatında yeniden yazar.
 -- Büyük tablolarda bu işlem uzun sürebilir; background'da çalışır.
 -- Durumu izlemek için:
 --   SELECT * FROM system.mutations WHERE table = 'messages' AND not is_done;
 -- ─────────────────────────────────────────────────────────────────────────────
+
+
+-- ═══════════════════════════════════════════════════════════════════
+-- ReplacingMergeTree + projeksiyon uyumu için tablo ayarını güncelle
+-- ═══════════════════════════════════════════════════════════════════
+ALTER TABLE senneo_messages.messages
+    MODIFY SETTING deduplicate_merge_projection_mode = 'rebuild';
 
 
 -- ═══════════════════════════════════════════════════════════════════
