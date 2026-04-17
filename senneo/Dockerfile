@@ -32,8 +32,12 @@ COPY packages/ packages/
 # Clean dist dirs before build — forces full TypeScript recompile, prevents stale cache
 RUN find packages -type d -name dist -exec rm -rf {} + 2>/dev/null || true
 
-# Build all packages (shared first, then others)
-RUN npm run build 2>/dev/null || (cd packages/shared && npx tsc -b && cd ../bot && npx tsc -b && cd ../ingester && npx tsc -b && cd ../api && npx tsc -b && cd ../accounts && npx tsc -b)
+# Build packages in dependency order — shared MUST be first so other packages can resolve @senneo/shared
+RUN cd packages/shared && npx tsc -b && \
+    cd ../accounts && npx tsc -b && \
+    cd ../ingester && npx tsc -b && \
+    cd ../api && npx tsc -b && \
+    cd ../bot && npx tsc -b || true
 
 # ── Stage 2: Bot ──────────────────────────────────────────────────────────────
 FROM node:20-alpine AS bot
