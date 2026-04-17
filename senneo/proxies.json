@@ -1,9 +1,50 @@
 {
-  "enabled": false,
-  "strictMode": false,
+  "enabled": true,
+  "strictMode": true,
   "rotationMode": "weighted",
   "healthCheckMs": 30000,
   "failThreshold": 4,
   "cooldownMs": 60000,
-  "proxies": []
+  "proxies": [
+    {
+      "id": "imp-1776380046551-0",
+      "label": "P-0001",
+      "url": "http://14a7bc0c8c92a:ae72a50bf5@93.92.18.103:12323",
+      "maxConns": 1,
+      "weight": 1,
+      "enabled": true
+    },
+    {
+      "id": "imp-1776380046551-1",
+      "label": "P-0002",
+      "url": "http://14a7bc0c8c92a:ae72a50bf5@93.92.18.51:12323",
+      "maxConns": 1,
+      "weight": 1,
+      "enabled": true
+    },
+    {
+      "id": "imp-1776380046551-2",
+      "label": "P-0003",
+      "url": "http://14a7bc0c8c92a:ae72a50bf5@78.24.124.26:12323",
+      "maxConns": 1,
+      "weight": 1,
+      "enabled": true
+    },
+    {
+      "id": "imp-1776380046551-3",
+      "label": "P-0004",
+      "url": "http://14a7bc0c8c92a:ae72a50bf5@78.24.124.235:12323",
+      "maxConns": 1,
+      "weight": 1,
+      "enabled": true
+    },
+    {
+      "id": "imp-1776380046551-4",
+      "label": "P-0005",
+      "url": "http://14a7bc0c8c92a:ae72a50bf5@78.24.125.224:12323",
+      "maxConns": 1,
+      "weight": 1,
+      "enabled": true
+    }
+  ]
 }

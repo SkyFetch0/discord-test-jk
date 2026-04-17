@@ -154,40 +154,48 @@ async function checkProxyHealth(proxy: NormalizedProxyConfig, pool: NormalizedPr
     if (now - cached.checkedAtMs < pool.healthCheckMs) return cached;
   }
 
-  const undici = await import('undici') as unknown as {
-    request: (url: string, opts: Record<string, unknown>) => Promise<{ statusCode: number; body: { dump?: () => Promise<void> } }>;
-    ProxyAgent: new (uri: string) => { close?: () => Promise<void> };
-    Socks5ProxyAgent: new (uri: string) => { close?: () => Promise<void> };
-  };
-  let dispatcher: { close?: () => Promise<void> } | null = null;
   try {
-    dispatcher = proxy.protocol === 'socks'
-      ? new undici.Socks5ProxyAgent(proxy.url)
-      : new undici.ProxyAgent(proxy.url);
+    // https-proxy-agent for http/https proxies, socks-proxy-agent for socks
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const agentMod = proxy.protocol === 'socks'
+      ? require('socks-proxy-agent')
+      : require('https-proxy-agent');
+    const AgentClass = agentMod.SocksProxyAgent ?? agentMod.HttpsProxyAgent;
+    const agent = new AgentClass(proxy.url);
+
     const startedAt = Date.now();
-    const hardTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Health check timeout (10s)')), 10_000));
-    const response = await Promise.race([
-      undici.request('https://discord.com/api/v10/gateway', {
+    const statusCode = await new Promise<number>((resolve, reject) => {
+      const https = require('https');
+      const http = require('http');
+      const url = new URL('http://api.ipify.org/');
+      const mod = url.protocol === 'https:' ? https : http;
+      const timeoutHandle = setTimeout(() => reject(new Error('Health check timeout (5s)')), 5_000);
+      const req = mod.request({
+        hostname: url.hostname,
+        path: url.pathname,
         method: 'GET',
-        dispatcher,
+        agent,
         headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        headersTimeout: 8_000,
-        bodyTimeout: 8_000,
-      }),
-      hardTimeout,
-    ]);
-    await response.body.dump?.();
+      }, (res: any) => {
+        clearTimeout(timeoutHandle);
+        res.resume();
+        resolve(res.statusCode);
+      });
+      req.on('error', (e: Error) => { clearTimeout(timeoutHandle); reject(e); });
+      req.setTimeout(5_000, () => { req.destroy(); reject(new Error('Health check timeout (5s)')); });
+      req.end();
+    });
+
     const latencyMs = Date.now() - startedAt;
+    const ok = statusCode >= 200 && statusCode < 300;
     const next: ProxyHealthCacheEntry = {
       proxyId: proxy.proxyId,
-      status: response.statusCode >= 200 && response.statusCode < 300
-        ? (latencyMs > 2_000 ? 'degraded' : 'healthy')
-        : 'down',
+      status: ok ? (latencyMs > 4_000 ? 'degraded' : 'healthy') : 'down',
       latencyMs,
       lastCheckedAt: new Date().toISOString(),
-      lastSuccessAt: response.statusCode >= 200 && response.statusCode < 300 ? new Date().toISOString() : cached?.lastSuccessAt ?? null,
-      lastError: response.statusCode >= 200 && response.statusCode < 300 ? null : `HTTP ${response.statusCode}`,
-      consecutiveFails: response.statusCode >= 200 && response.statusCode < 300 ? 0 : (cached?.consecutiveFails ?? 0) + 1,
+      lastSuccessAt: ok ? new Date().toISOString() : (cached?.lastSuccessAt ?? null),
+      lastError: ok ? null : `HTTP ${statusCode}`,
+      consecutiveFails: ok ? 0 : (cached?.consecutiveFails ?? 0) + 1,
       cooldownUntil: null,
       checkedAtMs: now,
     };
@@ -212,13 +220,38 @@ async function checkProxyHealth(proxy: NormalizedProxyConfig, pool: NormalizedPr
     };
     healthCache.set(proxy.proxyId, next);
     return next;
-  } finally {
-    await dispatcher?.close?.().catch(() => {});
   }
+}
+
+let _bgHealthInterval: ReturnType<typeof setInterval> | null = null;
+
+function startBackgroundHealthChecks(): void {
+  if (_bgHealthInterval) return;
+  const runChecks = () => {
+    const { pool } = readProxyPoolFile();
+    if (!pool.enabled || pool.proxies.length === 0) return;
+    const enabledProxies = pool.proxies.filter(p => p.enabled);
+    const now = Date.now();
+    // Her proxy için ayrı ayrı non-blocking fire-and-forget
+    for (const proxy of enabledProxies) {
+      const cached = healthCache.get(proxy.proxyId);
+      const stale = !cached || (now - cached.checkedAtMs) > pool.healthCheckMs;
+      if (stale) {
+        setImmediate(() => {
+          checkProxyHealth(proxy, pool, false).catch(() => {});
+        });
+      }
+    }
+  };
+  // İlk check 5 saniye sonra (API startup'a yük bindirme)
+  setTimeout(runChecks, 5_000);
+  // Sonraki checkler her 30 saniyede bir
+  _bgHealthInterval = setInterval(runChecks, 30_000);
 }
 
 export function proxiesRouter(): Router {
   const router = Router();
+  startBackgroundHealthChecks();
 
   router.get('/', async (req: Request, res: Response) => {
     const force = ['1', 'true', 'yes'].includes(String(req.query['force'] ?? '').toLowerCase());
@@ -260,13 +293,26 @@ export function proxiesRouter(): Router {
     const staleRuntimeAssignments = [...runtimeByKey.values()]
       .filter(row => !effectiveAssignments.some(assignment => assignment.accountKey === row.accountKey));
 
-    const healthEntries = force
-      ? await Promise.all(pool.proxies.map(proxy => checkProxyHealth(proxy, pool, true)))
-      : pool.proxies.map(proxy => {
-          const cached = healthCache.get(proxy.proxyId);
-          if (cached) return cached;
-          return { proxyId: proxy.proxyId, status: (proxy.enabled ? 'unknown' : 'disabled') as ProxyHealthStatus, latencyMs: null, lastCheckedAt: null, lastSuccessAt: null, lastError: null, consecutiveFails: 0, cooldownUntil: null, checkedAtMs: 0 };
-        });
+    // force=true: senkron bekle (dashboard'da "Yenile" butonu)
+    // force=false: sadece cache'den oku, arka planda stale olanları güncelle
+    if (force) {
+      await Promise.allSettled(pool.proxies.map(proxy => checkProxyHealth(proxy, pool, true)));
+    } else {
+      // Stale proxy'leri arka planda güncelle, bloklamadan devam et
+      const now = Date.now();
+      for (const proxy of pool.proxies) {
+        const cached = healthCache.get(proxy.proxyId);
+        const stale = !cached || (now - cached.checkedAtMs) > pool.healthCheckMs;
+        if (stale && proxy.enabled) {
+          setImmediate(() => checkProxyHealth(proxy, pool, false).catch(() => {}));
+        }
+      }
+    }
+    const healthEntries = pool.proxies.map(proxy => {
+      const cached = healthCache.get(proxy.proxyId);
+      if (cached) return cached;
+      return { proxyId: proxy.proxyId, status: (proxy.enabled ? 'unknown' : 'disabled') as ProxyHealthStatus, latencyMs: null, lastCheckedAt: null, lastSuccessAt: null, lastError: null, consecutiveFails: 0, cooldownUntil: null, checkedAtMs: 0 };
+    });
     const healthByProxyId = new Map(healthEntries.map(entry => [entry.proxyId, entry]));
 
     const staleProxyMap = new Map<string, { proxyId: string; label: string | null; maskedUrl: string | null; protocol: ProxyProtocol | null; host: string | null; port: number | null; region: string | null; assignedAccounts: typeof effectiveAssignments }>();

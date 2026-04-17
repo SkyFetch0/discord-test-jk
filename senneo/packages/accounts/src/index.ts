@@ -174,6 +174,10 @@ function loadAccounts(): Array<[number, AccountConfig]> {
 function createClient(token: string, proxyBundle?: ProxyAgentBundle): Promise<any> {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { Client } = require('discord.js-selfbot-v13');
+  const tokenHint = failedTokenHint(token);
+  const proxyInfo = proxyBundle ? proxyBundle.proxyUrl.replace(/\/\/.*?@/, '//<creds>@') : 'DIRECT (proxy yok)';
+  console.log(`[login] Token=${tokenHint} | Proxy=${proxyInfo} | agent=${proxyBundle?.agent?.constructor?.name ?? 'none'}`);
+
   // discord.js-selfbot-v13 proxy plumbing:
   //   ws.agent  → passed to `ws` library.  ws requires `instanceof http.Agent`.
   //               BUT discord.js verifyProxyAgent() also checks agent.httpAgent/httpsAgent.
@@ -186,14 +190,99 @@ function createClient(token: string, proxyBundle?: ProxyAgentBundle): Promise<an
     wsAgent.httpsAgent = proxyBundle.agent;
     opts.ws   = { agent: wsAgent };
     opts.http = { agent: proxyBundle.proxyUrl };
+    console.log(`[login] WS agent set: httpAgent=${!!wsAgent.httpAgent} httpsAgent=${!!wsAgent.httpsAgent} | http.agent=${proxyBundle.proxyUrl.replace(/\/\/.*?@/, '//<creds>@')}`);
+  } else {
+    console.log(`[login] Proxy yok — doğrudan bağlantı`);
   }
   return new Promise((resolve, reject) => {
     const client = new Client(opts);
-    const timeout = setTimeout(() => reject(new Error('Login timeout')), 30_000);
-    client.once('ready', () => { clearTimeout(timeout); console.log(`[accounts] ✓ ${client.user?.username}`); resolve(client); });
-    client.once('error', (err: Error) => { clearTimeout(timeout); reject(err); });
-    client.login(token).catch((err: Error) => { clearTimeout(timeout); reject(err); });
+    const timeout = setTimeout(() => {
+      console.error(`[login] TIMEOUT: Token=${tokenHint} proxy=${proxyInfo}`);
+      reject(new Error('Login timeout'));
+    }, 30_000);
+    client.once('ready', () => {
+      clearTimeout(timeout);
+      console.log(`[accounts] ✓ ${client.user?.username} (${client.user?.id}) | proxy=${proxyInfo}`);
+      resolve(client);
+    });
+    client.once('error', (err: Error) => {
+      clearTimeout(timeout);
+      console.error(`[login] WS error: Token=${tokenHint} proxy=${proxyInfo} → ${err.message}`);
+      reject(err);
+    });
+    client.login(token).catch((err: Error) => {
+      clearTimeout(timeout);
+      console.error(`[login] login() rejected: Token=${tokenHint} proxy=${proxyInfo} → ${err.message}`);
+      reject(err);
+    });
   });
+}
+
+let _serverIp: string | null = null;
+let _serverIpPromise: Promise<string | null> | null = null;
+async function getServerIp(): Promise<string | null> {
+  if (_serverIp) return _serverIp;
+  if (_serverIpPromise) return _serverIpPromise;
+  _serverIpPromise = new Promise(resolve => {
+    const req = https.request(
+      { hostname: 'api.ipify.org', path: '/', method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0' } },
+      (res) => {
+        let d = ''; res.on('data', (c: Buffer) => d += c.toString()); res.on('end', () => { _serverIp = d.trim(); resolve(_serverIp); });
+      },
+    );
+    req.on('error', () => resolve(null));
+    req.setTimeout(5000, () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+  return _serverIpPromise;
+}
+
+async function verifyProxyIp(gIdx: number, proxyUrl: string, proxyLabel: string): Promise<{ ok: boolean; proxyIp: string | null; serverIp: string | null }> {
+  const serverIp = await getServerIp();
+  // HTTP proxy tüneli: proxy'ye bağlan, GET http://api.ipify.org/ iste (Proxy-Authorization header ile)
+  const proxyIp: string | null = await new Promise(resolve => {
+    try {
+      const parsed = new URL(proxyUrl);
+      const auth = parsed.username && parsed.password
+        ? Buffer.from(`${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`).toString('base64')
+        : null;
+      const headers: Record<string, string> = {
+        'Host': 'api.ipify.org',
+        'User-Agent': 'Mozilla/5.0',
+        ...(auth ? { 'Proxy-Authorization': `Basic ${auth}` } : {}),
+      };
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const httpMod = require('http') as typeof import('http');
+      const req = httpMod.request(
+        {
+          hostname: parsed.hostname,
+          port: Number(parsed.port) || 3128,
+          path: 'http://api.ipify.org/',
+          method: 'GET',
+          headers,
+        },
+        (res) => {
+          let d = ''; res.on('data', (c: Buffer) => d += c.toString()); res.on('end', () => resolve(d.trim() || null));
+        },
+      );
+      req.on('error', (e: Error) => { console.warn(`[proxy-verify] idx=${gIdx} ${proxyLabel} IP check hatası: ${e.message}`); resolve(null); });
+      req.setTimeout(8000, () => { req.destroy(); resolve(null); });
+      req.end();
+    } catch (e) {
+      console.warn(`[proxy-verify] idx=${gIdx} ${proxyLabel} parse hatası: ${(e as Error).message}`);
+      resolve(null);
+    }
+  });
+
+  const ok = !!proxyIp && proxyIp !== serverIp;
+  if (ok) {
+    console.log(`[proxy-verify] ✓ idx=${gIdx} ${proxyLabel} — proxy IP: ${proxyIp} (sunucu: ${serverIp}) → farklı, güvenli`);
+  } else if (proxyIp === serverIp) {
+    console.warn(`[proxy-verify] ✗ idx=${gIdx} ${proxyLabel} — proxy IP sunucu IP ile AYNI (${proxyIp})! Proxy çalışmıyor olabilir`);
+  } else {
+    console.warn(`[proxy-verify] ✗ idx=${gIdx} ${proxyLabel} — proxy IP alınamadı (timeout/hata), sunucu: ${serverIp}`);
+  }
+  return { ok, proxyIp, serverIp };
 }
 
 async function fetchGuildIds(token: string, agent?: Agent): Promise<Set<string>> {
@@ -346,17 +435,31 @@ async function main(): Promise<void> {
     await Promise.all(chunk.map(async ([gIdx, acc]) => {
     const accountKey = `idx:${gIdx}`;
     const proxyAssignment = proxyAssignmentForIdx(gIdx);
+    const tokenHint2 = failedTokenHint(acc.token);
+    console.log(`[login-plan] idx=${gIdx} token=${tokenHint2} proxyEnabled=${isProxyPoolEnabled()} strictMode=${isProxyStrictMode()} proxyAssigned=${!!proxyAssignment?.proxy} proxyLabel=${proxyAssignment?.proxy?.label ?? 'none'}`);
     let bundle: ProxyAgentBundle | undefined;
     try {
       if (isProxyPoolEnabled()) {
         if (!proxyAssignment?.proxy) {
           const noProxyMsg = 'Proxy sistemi aktif ama hesaba atanmış proxy yok';
+          console.warn(`[login-plan] idx=${gIdx} — proxy yok! strictMode=${isProxyStrictMode()}`);
           updateRuntimeProxyAssignment(accountKey, { connected: false, lastError: noProxyMsg, direct: true });
           if (isProxyStrictMode()) throw new Error(noProxyMsg);
         } else {
+          console.log(`[login-plan] idx=${gIdx} — proxy bundle oluşturuluyor: ${proxyAssignment.proxy.maskedUrl}`);
           bundle = await createProxyAgentBundle(proxyAssignment.proxy);
+          console.log(`[login-plan] idx=${gIdx} — bundle hazır: agent=${bundle?.agent?.constructor?.name ?? 'null'}`);
           console.log(`[accounts] Hesap (idx ${gIdx}) → proxy ${proxyAssignment.proxy.maskedUrl}`);
+          // Proxy IP doğrulaması: discorda bağlanmadan önce proxy IP'nin sunucu IP'sinden farklı olduğunu doğrula
+          const verify = await verifyProxyIp(gIdx, bundle!.proxyUrl, proxyAssignment.proxy.label ?? proxyAssignment.proxy.maskedUrl);
+          if (!verify.ok && isProxyStrictMode()) {
+            throw new Error(`Proxy IP doğrulaması başarısız: proxy=${verify.proxyIp ?? 'null'} sunucu=${verify.serverIp ?? 'null'} (${proxyAssignment.proxy.maskedUrl})`);
+          }
         }
+      } else {
+        console.log(`[login-plan] idx=${gIdx} — proxy kapalı, direct bağlantı`);
+        const serverIp = await getServerIp();
+        console.log(`[proxy-verify] idx=${gIdx} — direct bağlantı, sunucu IP: ${serverIp}`);
       }
       const client = await createClient(acc.token, bundle) as any;
       const discordId: string = client.user?.id ?? String(gIdx);
@@ -406,9 +509,16 @@ async function main(): Promise<void> {
         emit('scrape_error', `${clientUsername || discordId} oturum gecersiz`, { accountId: discordId, accountName: clientUsername || discordId });
       });
     } catch (err) {
-      console.error(`[accounts] Hesap (idx ${gIdx}) giriş başarısız:`, err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errCode = (err as any)?.code ?? (err as any)?.[Symbol.for('code')] ?? 'no_code';
+      const errStack = err instanceof Error ? (err.stack ?? '').split('\n').slice(0, 4).join(' | ') : '';
+      console.error(`[accounts] Hesap (idx ${gIdx}) giriş başarısız:`);
+      console.error(`  → hata   : ${errMsg}`);
+      console.error(`  → kod    : ${errCode}`);
+      console.error(`  → token  : ${tokenHint2}`);
+      console.error(`  → proxy  : ${bundle ? proxyAssignment?.proxy?.maskedUrl ?? 'bundle var ama url yok' : 'DIRECT'}`);
+      console.error(`  → stack  : ${errStack}`);
       try {
-        const errMsg = err instanceof Error ? err.message : String(err);
         const { accountId: discordId, username, tokenHint } = await recordFailedAccount(db, acc.token, `unknown_idx_${gIdx}`, 'login_failed', errMsg, bundle?.agent);
         updateRuntimeProxyAssignment(accountKey, { accountId: discordId, username, connected: false, lastError: errMsg });
         emit('scrape_error', `${username || discordId} login başarısız`, { accountId: discordId, accountName: username || discordId });
