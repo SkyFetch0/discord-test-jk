@@ -575,17 +575,22 @@ export async function scrapeChannel(
         }
 
         if (e?.httpStatus === 403 || e?.status === 403) {
+          console.warn(`[scraper] ${channelId} HTTP 403 — erişim yok (accountId=${accountId ?? '-'})`);
           recordError(channelId, 'no permission (403)');
           return { rawMessages: null, result: { kind: 'error_terminal', code: 'discord_403', reason: 'no permission (403)' } };
         }
         if (e?.httpStatus === 404 || e?.status === 404) {
+          console.warn(`[scraper] ${channelId} HTTP 404 — kanal bulunamadı (accountId=${accountId ?? '-'})`);
           recordError(channelId, 'not found (404)');
           return { rawMessages: null, result: { kind: 'error_terminal', code: 'discord_404', reason: 'not found (404)' } };
         }
 
         attempt++;
         const wait = backoffMs(attempt);
-        recordError(channelId, `fetch error attempt ${attempt}: ${e?.message ?? e}`);
+        const errMsg = e?.message ?? String(e);
+        const errCode = e?.code ?? e?.status ?? 'unknown';
+        console.warn(`[scraper] ${channelId} fetch hatası attempt=${attempt}/${MAX_RETRIES} code=${errCode} waitMs=${wait} — ${errMsg}`);
+        recordError(channelId, `fetch error attempt ${attempt}: ${errMsg}`);
         if (attempt < MAX_RETRIES && !(await waitFor(wait, signal))) {
           return { rawMessages: null, result: { kind: 'aborted', code: 'abort_signal', reason: 'abort signal received' } };
         }
@@ -594,6 +599,7 @@ export async function scrapeChannel(
 
     if (signal?.aborted) return { rawMessages: null, result: { kind: 'aborted', code: 'abort_signal', reason: 'abort signal received' } };
     if (!rawMessages) {
+      console.error(`[scraper] ${channelId} max_retries aşıldı — scrape durdu (accountId=${accountId ?? '-'})`);
       recordError(channelId, `giving up after ${MAX_RETRIES} retries`);
       return { rawMessages: null, result: { kind: 'error_retryable', code: 'max_retries', reason: `giving up after ${MAX_RETRIES} retries` } };
     }
