@@ -4,6 +4,35 @@ import { getCheckpoint, setCheckpoint } from './checkpoint';
 import { initChannel, recordBatch, recordRateLimit, recordError, recordComplete } from './stats';
 import { emit } from './scrape-event-log';
 
+// Proxy dispatcher cache — her proxyUrl için tek bir ProxyAgent tutulur.
+// Her istekte yeniden bağlantı kurulmasını önler, 2-3 saniyelik gecikmeleri giderir.
+const _proxyDispatcherCache = new Map<string, { dispatcher: any; undici: any }>();
+
+async function getOrCreateDispatcher(proxyUrl: string): Promise<{ dispatcher: any; undici: any }> {
+  if (_proxyDispatcherCache.has(proxyUrl)) {
+    return _proxyDispatcherCache.get(proxyUrl)!;
+  }
+  const undici = await import('undici') as any;
+  const protocol = proxyUrl.startsWith('socks') ? 'socks' : 'http';
+  const dispatcher = protocol === 'socks'
+    ? new undici.SocksProxyAgent(proxyUrl)
+    : new undici.ProxyAgent(proxyUrl);
+  const entry = { dispatcher, undici };
+  _proxyDispatcherCache.set(proxyUrl, entry);
+  console.log(`[scraper-proxy] ProxyAgent oluşturuldu ve cache'lendi: ${proxyUrl.replace(/\/\/.*?@/, '//<creds>@')}`);
+  return entry;
+}
+
+export function clearProxyDispatcherCache(proxyUrl?: string): void {
+  if (proxyUrl) {
+    const entry = _proxyDispatcherCache.get(proxyUrl);
+    if (entry) { entry.dispatcher?.close?.().catch(() => {}); _proxyDispatcherCache.delete(proxyUrl); }
+  } else {
+    for (const [, entry] of _proxyDispatcherCache) { entry.dispatcher?.close?.().catch(() => {}); }
+    _proxyDispatcherCache.clear();
+  }
+}
+
 type DiscordClient  = any;
 type DiscordMessage = any;
 
@@ -247,11 +276,8 @@ async function rawFetchMessages(
 
   if (proxyUrl) {
     // Proxy varsa undici kullan — native fetch() proxy agent desteklemez.
-    const undici = await import('undici') as any;
-    const protocol = proxyUrl.startsWith('socks') ? 'socks' : 'http';
-    const dispatcher = protocol === 'socks'
-      ? new undici.SocksProxyAgent(proxyUrl)
-      : new undici.ProxyAgent(proxyUrl);
+    // Dispatcher cache'lenir: her proxyUrl için tek TCP bağlantısı havuzu tutulur.
+    const { dispatcher, undici } = await getOrCreateDispatcher(proxyUrl);
     try {
       const res = await undici.request(url, {
         method: 'GET',
@@ -263,8 +289,13 @@ async function rawFetchMessages(
       });
       statusCode = res.statusCode;
       bodyText = await res.body.text();
-    } finally {
-      await dispatcher?.close?.().catch(() => {});
+    } catch (err: any) {
+      // Bağlantı hatası → cache'i temizle, bir sonraki istekte yeniden bağlansın
+      if (err?.code === 'ECONNRESET' || err?.code === 'ECONNREFUSED' || err?.code === 'UND_ERR_SOCKET') {
+        console.warn(`[scraper-proxy] Bağlantı hatası (${err.code}), dispatcher cache temizleniyor: ${proxyUrl.replace(/\/\/.*?@/, '//<creds>@')}`);
+        clearProxyDispatcherCache(proxyUrl);
+      }
+      throw err;
     }
   } else {
     // Proxy yoksa native fetch kullan
