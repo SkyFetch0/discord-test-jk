@@ -25,6 +25,11 @@ if (process.env.JWT_SECRET) {
   console.warn('[auth] WARNING: JWT_SECRET not set — using ephemeral random secret. Set JWT_SECRET env var for stable sessions.');
 }
 const COOKIE_NAME = 'senneo_token';
+// COOKIE_SECURE: sadece gerçek HTTPS varsa true yapılmalı.
+// NODE_ENV=production ama HTTP üzerinde çalışılıyorsa COOKIE_SECURE=false set edilmeli.
+const COOKIE_SECURE = process.env.COOKIE_SECURE != null
+  ? ['true', '1', 'yes'].includes(process.env.COOKIE_SECURE.toLowerCase())
+  : IS_PROD;
 const ACCOUNTS_FILE = path.resolve(process.cwd(), 'accounts.json');
 const TEXT_CHANNEL_TYPES = new Set([0, 5, 10, 11, 12]);
 
@@ -130,10 +135,8 @@ function parseCookies(req: Request): Record<string, string> {
 }
 
 function setTokenCookie(res: Response, token: string): void {
-  // 7 days in seconds
   const maxAge = 7 * 24 * 60 * 60;
-  // FIX #5: Add Secure flag in production so cookie is never sent over plain HTTP.
-  const secureFlag = IS_PROD ? '; Secure' : '';
+  const secureFlag = COOKIE_SECURE ? '; Secure' : '';
   res.setHeader(
     'Set-Cookie',
     `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureFlag}`,
