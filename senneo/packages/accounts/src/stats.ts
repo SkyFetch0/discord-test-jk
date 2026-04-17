@@ -227,6 +227,7 @@ export function recordError(channelId: string, msg: string): void {
   _errors[channelId].push(`${new Date().toISOString()} ${msg}`);
   if (_errors[channelId].length > 20) _errors[channelId].shift();
   _dirty.add(channelId);
+  console.warn(`[scraper-error] channel=${channelId} ${msg}`);
 }
 
 export function recordComplete(channelId: string): void {
