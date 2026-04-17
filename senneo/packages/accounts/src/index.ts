@@ -461,6 +461,19 @@ async function main(): Promise<void> {
         const serverIp = await getServerIp();
         console.log(`[proxy-verify] idx=${gIdx} — direct bağlantı, sunucu IP: ${serverIp}`);
       }
+
+      // Pre-flight REST token validation — WS bağlantısı açmadan önce token geçerliliğini doğrula.
+      // TOKEN_INVALID hatası WS handshake sırasında değil, burada yakalanır → daha hızlı hata tespiti.
+      const preflightMe = await fetchDiscordMe(acc.token, bundle?.agent);
+      if (!preflightMe?.id) {
+        const reason = 'REST pre-flight başarısız: token geçersiz veya Discord erişilemiyor';
+        console.error(`[login-plan] idx=${gIdx} token=${tokenHint2} — ${reason}`);
+        const preflightErr: any = new Error('An invalid token was provided.');
+        preflightErr.code = 'TOKEN_INVALID';
+        throw preflightErr;
+      }
+      console.log(`[login-plan] idx=${gIdx} token=${tokenHint2} — REST pre-flight OK: id=${preflightMe.id} username=${preflightMe.username ?? '?'}`);
+
       const client = await createClient(acc.token, bundle) as any;
       const discordId: string = client.user?.id ?? String(gIdx);
       const clientUsername: string = client.user?.username ?? '';
