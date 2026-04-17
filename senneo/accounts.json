@@ -1,16 +1,11 @@
 {
   "accounts": [
-    {
-      "token": "MTQ4NjYxMTc1Njc2Njk4NjM2Mg.GezPy_.kePdHm_Rxg-8M2kf2-5ivbSQHack-Pznydvuu0"
-    },
-    {
-      "token": "MTQ4NjYxMTc1Njc2Njk4NjM2Mg.GezPy_.kePdHm_Rxg-8M2kf2-5ivbSQHack-Pznydvuu0"
-    },
-    {
-      "token": "NjU0ODUzNzM3ODczMDE0Nzg0.GGPhHt.PBQoli8AFv5RXWgxS5t7LfO7zHQb9pnNJ4zr-g"
-    },
-    {
-      "token": "NjU0ODUzNzM3ODczMDE0Nzg0.GGPhHt.PBQoli8AFv5RXWgxS5t7LfO7zHQb9pnNJ4zr-g"
-    }
+    { "token": "MTQ4NjYxMTc1Njc2Njk4NjM2Mg.GezPy_.kePdHm_Rxg-8M2kf2-5ivbSQHack-Pznydvuu0" },
+    { "token": "NjU0ODUzNzM3ODczMDE0Nzg0.GGPhHt.PBQoli8AFv5RXWgxS5t7LfO7zHQb9pnNJ4zr-g" },
+    { "token": "OTk1MjE1MTcwNzI3MDU1NDEw.GE_ZE6.n9ed3Aasi2l3pYvcoTejtRa5wXa12q_DZandVQ" },
+    { "token": "OTk5MTg5MzMyMDIxNzU1OTY1.GDuk0l.fEOj3WTzB0LXIhur9Xd3pIvMDjsr8ZilIPofVg" },
+    { "token": "OTI4NTg3MjQ0Nzc4OTYyOTk3.G5nfg3.k0iT-pkEvFPJGUs276BudDNYEKpTMadcKZePKw" },
+    { "token": "OTkxMTY0OTM5NTc2MjgzMjc2.G_PuDx.vYav8ZmUD_J7n_iOwLntiS7Fk7dhgqvQDmqpws" },
+    { "token": "MTA1NzY4MTMwMTI2MTUzNzI4MA.G9Xh7y.yIRKA5oWaZDph3Nd6DfmDGYEina8OhFRlbluRw" }
   ]
 }
