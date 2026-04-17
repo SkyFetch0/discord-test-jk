@@ -29,6 +29,9 @@ RUN npm ci --ignore-scripts 2>/dev/null || npm install
 # Copy source code
 COPY packages/ packages/
 
+# Clean dist dirs before build — forces full TypeScript recompile, prevents stale cache
+RUN find packages -type d -name dist -exec rm -rf {} + 2>/dev/null || true
+
 # Build all packages (shared first, then others)
 RUN npm run build 2>/dev/null || (cd packages/shared && npx tsc -b && cd ../bot && npx tsc -b && cd ../ingester && npx tsc -b && cd ../api && npx tsc -b && cd ../accounts && npx tsc -b)
 
