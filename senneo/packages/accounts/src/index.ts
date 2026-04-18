@@ -311,15 +311,27 @@ function failedTokenHint(token: string): string {
   return token.length > 20 ? token.slice(0, 8) + '...' + token.slice(-4) : '***';
 }
 
-async function fetchDiscordMe(token: string, agent?: Agent): Promise<{ id?: string; username?: string } | null> {
+async function fetchDiscordMe(token: string, agent?: Agent): Promise<{ id?: string; username?: string; _networkError?: boolean; _tokenInvalid?: boolean; _statusCode?: number } | null> {
   return new Promise(resolve => {
     const req = https.request({ hostname: 'discord.com', path: '/api/v10/users/@me', method: 'GET',
       headers: { Authorization: token, 'User-Agent': 'Mozilla/5.0' },
       ...(agent ? { agent } : {}),
     }, (res: any) => {
+      const statusCode: number = res.statusCode ?? 0;
       let d = ''; res.on('data', (c: Buffer) => d += c.toString());
-      res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
-    }); req.on('error', () => resolve(null)); req.setTimeout(8000, () => { req.destroy(); resolve(null); }); req.end();
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(d);
+          // 401 = gerçek token hatası, 4xx diğerleri = proxy/ağ sorunu
+          if (statusCode === 401) return resolve({ _tokenInvalid: true, _statusCode: statusCode });
+          if (statusCode >= 400 && statusCode !== 401) return resolve({ _networkError: true, _statusCode: statusCode });
+          resolve(parsed);
+        } catch { resolve({ _networkError: true, _statusCode: statusCode }); }
+      });
+    });
+    req.on('error', () => resolve({ _networkError: true }));
+    req.setTimeout(10000, () => { req.destroy(); resolve({ _networkError: true }); });
+    req.end();
   });
 }
 
@@ -465,8 +477,13 @@ async function main(): Promise<void> {
       // Pre-flight REST token validation — WS bağlantısı açmadan önce token geçerliliğini doğrula.
       // TOKEN_INVALID hatası WS handshake sırasında değil, burada yakalanır → daha hızlı hata tespiti.
       const preflightMe = await fetchDiscordMe(acc.token, bundle?.agent);
-      if (!preflightMe?.id) {
-        const reason = 'REST pre-flight başarısız: token geçersiz veya Discord erişilemiyor';
+      if (preflightMe?._networkError) {
+        // Proxy veya ağ sorunu — token geçerli olabilir, bu hesabı geç ama fatal sayma
+        console.warn(`[login-plan] idx=${gIdx} token=${tokenHint2} — REST pre-flight ağ hatası (proxy/timeout), HTTP=${preflightMe._statusCode ?? '?'} — hesap atlanıyor`);
+        return; // Bu hesabı skip et, diğerleri devam etsin
+      }
+      if (preflightMe?._tokenInvalid || !preflightMe?.id) {
+        const reason = 'REST pre-flight başarısız: token geçersiz (HTTP 401)';
         console.error(`[login-plan] idx=${gIdx} token=${tokenHint2} — ${reason}`);
         const preflightErr: any = new Error('An invalid token was provided.');
         preflightErr.code = 'TOKEN_INVALID';
@@ -547,7 +564,12 @@ async function main(): Promise<void> {
   }
 
   const activeIds = [...clients.keys()];
-  if (!activeIds.length) throw new Error('Hiçbir hesap giriş yapamadı');
+  if (!activeIds.length) {
+    // Eğer hiç başarılı giriş yoksa — proxy sorunuysa tekrar dene, token sorunuysa fatal
+    console.error('[accounts] Hiçbir hesap giriş yapamadı — 30 saniye sonra yeniden denenecek...');
+    await new Promise(r => setTimeout(r, 30_000));
+    throw new Error('Hiçbir hesap giriş yapamadı');
+  }
   console.log(`[accounts] ${activeIds.length} hesap hazır | concurrency=${CONCURRENT_CHNL}`);
   startEventLog();
   // Build [discordId, config] pairs for guild-sync
