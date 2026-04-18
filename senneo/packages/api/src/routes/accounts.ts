@@ -1652,7 +1652,7 @@ export function accountsRouter(db: CassandraClient): Router {
           alreadyAdded: existing.has(c.id),
         }))
         .sort((a, b) => b.lastActivity - a.lastActivity)
-        .slice(0, 10); // Top 10
+        .slice(0, 50); // Top 50
 
       // Kanal isimlerini cache'e kaydet
       const namesToSave: Record<string, string> = {};

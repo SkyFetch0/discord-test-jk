@@ -763,16 +763,18 @@ export function authRouter(db: CassandraClient): Router {
   // POST /auth/tasks — create single task (admin only)
   router.post('/tasks', requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { assignedTo, title, description, priority, deadline } = req.body ?? {};
+      const { assignedTo, title, description, priority, deadline, taskType, guildId, guildName, accountId, accountName, inviteCode } = req.body ?? {};
       if (!assignedTo || !title) { res.status(400).json({ error: 'assignedTo ve title gerekli' }); return; }
       const admin = (req as any).user as AuthUser;
       const taskId = genId();
       const now = new Date();
       const dl = deadline ? new Date(deadline) : null;
+      const resolvedTaskType = taskType ?? 'generic';
       await db.execute(
-        `INSERT INTO ${KEYSPACE}.user_tasks (task_id, assigned_to, title, description, status, priority, task_type, deadline, created_by, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        [taskId, assignedTo, title, description ?? '', 'pending', priority ?? 'medium', 'generic', dl, admin.username, now, now],
+        `INSERT INTO ${KEYSPACE}.user_tasks (task_id, assigned_to, title, description, status, priority, task_type, deadline, created_by, created_at, updated_at, guild_id, guild_name, account_id, account_name, invite_code)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [taskId, assignedTo, title, description ?? '', 'pending', priority ?? 'medium', resolvedTaskType, dl, admin.username, now, now,
+         guildId ?? null, guildName ?? null, accountId ?? null, accountName ?? null, inviteCode ?? null],
       );
       const notifId = genId();
       await db.execute(
@@ -953,8 +955,21 @@ export function authRouter(db: CassandraClient): Router {
         const guildName = (task['guild_name'] as string) ?? '';
 
         // 2. Get account's token for verification
-        if (!accountId) { res.status(400).json({ error: 'Gorevde hesap bilgisi eksik' }); return; }
-        const token = await getTokenForAccount(db, accountId);
+        // account_id yoksa: request body'den accountId kabul et (manuel task'lar için)
+        let resolvedAccountId = accountId;
+        if (!resolvedAccountId) {
+          const bodyAccountId = typeof (req.body as any)?.accountId === 'string' ? (req.body as any).accountId.trim() : null;
+          if (bodyAccountId) {
+            resolvedAccountId = bodyAccountId;
+            // task'ı da güncelle ki bir dahaki PUT'ta tekrar gerekmesin
+            await db.execute(
+              `UPDATE ${KEYSPACE}.user_tasks SET account_id = ?, updated_at = ? WHERE assigned_to = ? AND task_id = ?`,
+              [resolvedAccountId, new Date(), owner, taskId],
+            ).catch(() => {});
+          }
+        }
+        if (!resolvedAccountId) { res.status(400).json({ error: 'Gorevde hesap bilgisi eksik — lutfen accountId alanini gonderin' }); return; }
+        const token = await getTokenForAccount(db, resolvedAccountId);
         if (!token) { res.status(400).json({ error: 'Hesap tokeni bulunamadi — hesap sistemde aktif degil' }); return; }
 
         // 3. Verify guild membership via Discord API
@@ -995,11 +1010,11 @@ export function authRouter(db: CassandraClient): Router {
         for (const channel of validatedChannels.channels) {
           await db.execute(
             `INSERT INTO ${KEYSPACE}.scrape_targets (channel_id, guild_id, account_id, account_idx, pinned_account_id, pinned_account_idx, created_at) VALUES (?,?,?,?,?,?,?)`,
-            [channel.id, realGuildId, accountId, accountIdx >= 0 ? accountIdx : null, accountId, accountIdx >= 0 ? accountIdx : null, now],
+            [channel.id, realGuildId, resolvedAccountId, accountIdx >= 0 ? accountIdx : null, resolvedAccountId, accountIdx >= 0 ? accountIdx : null, now],
           ).catch(() => {});
           await db.execute(
             `INSERT INTO ${KEYSPACE}.account_targets_by_account (account_id, channel_id, guild_id, label, account_idx, active_account_id, active_account_idx, pinned_account_id, pinned_account_idx, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-            [accountId, channel.id, realGuildId, channel.name, accountIdx >= 0 ? accountIdx : null, accountId, accountIdx >= 0 ? accountIdx : null, accountId, accountIdx >= 0 ? accountIdx : null, now],
+            [resolvedAccountId, channel.id, realGuildId, channel.name, accountIdx >= 0 ? accountIdx : null, resolvedAccountId, accountIdx >= 0 ? accountIdx : null, resolvedAccountId, accountIdx >= 0 ? accountIdx : null, now],
           ).catch(() => {});
           if (channel.name) {
             await db.execute(
@@ -1027,7 +1042,7 @@ export function authRouter(db: CassandraClient): Router {
         if (resolvedCode) {
           await db.execute(
             `UPDATE ${KEYSPACE}.invite_pool SET status = 'already_in', owner_account_id = ?, owner_account_name = ?, assigned_account_id = ?, assigned_account_name = ?, checked_at = ? WHERE invite_code = ?`,
-            [accountId, accountName, null, null, now, resolvedCode],
+            [resolvedAccountId, accountName, null, null, now, resolvedCode],
           ).catch(e => console.warn('[task] invite_pool update failed:', e?.message));
         }
 
@@ -1035,13 +1050,13 @@ export function authRouter(db: CassandraClient): Router {
         try {
           await db.execute(
             `INSERT INTO ${KEYSPACE}.guild_accounts (guild_id, account_id, guild_name, last_synced) VALUES (?,?,?,?)`,
-            [realGuildId, accountId, guildName, now],
+            [realGuildId, resolvedAccountId, guildName, now],
           );
         } catch (e: any) { console.warn('[task] guild_accounts write failed:', e?.message); }
         try {
           await db.execute(
             `INSERT INTO ${KEYSPACE}.account_guilds (account_id, guild_id, guild_name, guild_icon, guild_owner, last_synced) VALUES (?,?,?,?,?,?)`,
-            [accountId, realGuildId, guildName, '', false, now],
+            [resolvedAccountId, realGuildId, guildName, '', false, now],
           );
         } catch (e: any) { console.warn('[task] account_guilds write failed:', e?.message); }
 
