@@ -33,11 +33,13 @@ COPY packages/ packages/
 RUN find packages -type d -name dist -exec rm -rf {} + 2>/dev/null || true
 
 # Build packages in dependency order — shared MUST be first so other packages can resolve @senneo/shared
-RUN cd packages/shared && npx tsc -b && \
-    cd ../accounts && npx tsc -b && \
-    cd ../ingester && npx tsc -b && \
-    cd ../api && npx tsc -b && \
-    cd ../bot && npx tsc -b || true
+# shared is required — fail fast if it can't compile
+RUN cd packages/shared && npx tsc -b
+# remaining packages: best-effort (may have pre-existing TS errors unrelated to our changes)
+RUN cd packages/api && npx tsc -b || true
+RUN cd packages/ingester && npx tsc -b || true
+RUN cd packages/accounts && npx tsc -b || true
+RUN cd packages/bot && npx tsc -b || true
 
 # ── Stage 2: Bot ──────────────────────────────────────────────────────────────
 FROM node:20-alpine AS bot
