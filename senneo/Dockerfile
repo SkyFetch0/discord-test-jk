@@ -33,13 +33,12 @@ COPY packages/ packages/
 RUN find packages -type d -name dist -exec rm -rf {} + 2>/dev/null || true
 
 # Build packages in dependency order — shared MUST be first so other packages can resolve @senneo/shared
-# shared is required — fail fast if it can't compile
-RUN cd packages/shared && npx tsc -b
-# remaining packages: best-effort (may have pre-existing TS errors unrelated to our changes)
-RUN cd packages/api && npx tsc -b || true
-RUN cd packages/ingester && npx tsc -b || true
-RUN cd packages/accounts && npx tsc -b || true
-RUN cd packages/bot && npx tsc -b || true
+# Use explicit --outDir to guarantee dist is written regardless of tsconfig composite/incremental settings
+RUN cd packages/shared   && npx tsc --project tsconfig.json --outDir dist --declaration --noEmitOnError false
+RUN cd packages/api      && npx tsc --project tsconfig.json --outDir dist --declaration --noEmitOnError false || true
+RUN cd packages/ingester && npx tsc --project tsconfig.json --outDir dist --declaration --noEmitOnError false || true
+RUN cd packages/accounts && npx tsc --project tsconfig.json --outDir dist --declaration --noEmitOnError false || true
+RUN cd packages/bot      && npx tsc --project tsconfig.json --outDir dist --declaration --noEmitOnError false || true
 
 # ── Stage 2: Bot ──────────────────────────────────────────────────────────────
 FROM node:20-alpine AS bot
