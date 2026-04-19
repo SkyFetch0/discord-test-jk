@@ -505,15 +505,15 @@ async function main(): Promise<void> {
       // Clear from failed_accounts if previously failed
       db.execute(`DELETE FROM ${KEYSPACE}.failed_accounts WHERE account_id = ?`, [discordId]).catch(() => {});
       deleteFailedRowsByTokenHint(db, tokenHint).catch(() => {});
-      // Ensure account_info is populated (used by guild inventory categories)
+      // Ensure account_info is populated (used by guild inventory categories + task token lookup)
       db.execute(
         `INSERT INTO ${KEYSPACE}.account_info (account_id, discord_id, username, avatar, last_fetched) VALUES (?,?,?,?,?)`,
         [discordId, discordId, clientUsername, client.user?.avatar ?? '', new Date()],
-      ).catch(() => {});
+      ).catch((err: Error) => console.warn(`[accounts] account_info yazma hatası (idx=${gIdx}): ${err?.message}`));
       db.execute(
         `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`,
         [acc.token.slice(-16), discordId, clientUsername, new Date()],
-      ).catch(() => {});
+      ).catch((err: Error) => console.warn(`[accounts] token_account_map yazma hatası (idx=${gIdx}): ${err?.message}`));
 
       // Monitor: detect disconnect/error at runtime (token invalidated, ban, etc.)
       client.on('error', (err: Error) => {
@@ -525,8 +525,8 @@ async function main(): Promise<void> {
         updateRuntimeProxyAssignment(accountKey, { accountId: discordId, username: clientUsername, connected: false, lastError: 'WebSocket disconnected' });
         db.execute(
           `INSERT INTO ${KEYSPACE}.failed_accounts (account_id, username, token_hint, reason, error_msg, detected_at) VALUES (?,?,?,?,?,?)`,
-          [discordId, clientUsername, '', 'disconnected', 'WebSocket disconnected', new Date()],
-        ).catch(() => {});
+          [discordId, clientUsername, tokenHint, 'disconnected', 'WebSocket disconnected', new Date()],
+        ).catch((err: Error) => console.warn(`[accounts] failed_accounts (disconnect) yazma hatası: ${err?.message}`));
         emit('scrape_error', `${clientUsername || discordId} baglanti kesildi`, { accountId: discordId, accountName: clientUsername || discordId });
       });
       client.on('invalidated', () => {
@@ -534,8 +534,8 @@ async function main(): Promise<void> {
         updateRuntimeProxyAssignment(accountKey, { accountId: discordId, username: clientUsername, connected: false, lastError: 'Session invalidated by Discord' });
         db.execute(
           `INSERT INTO ${KEYSPACE}.failed_accounts (account_id, username, token_hint, reason, error_msg, detected_at) VALUES (?,?,?,?,?,?)`,
-          [discordId, clientUsername, '', 'token_invalidated', 'Session invalidated by Discord', new Date()],
-        ).catch(() => {});
+          [discordId, clientUsername, tokenHint, 'token_invalidated', 'Session invalidated by Discord', new Date()],
+        ).catch((err: Error) => console.warn(`[accounts] failed_accounts (invalidated) yazma hatası: ${err?.message}`));
         emit('scrape_error', `${clientUsername || discordId} oturum gecersiz`, { accountId: discordId, accountName: clientUsername || discordId });
       });
     } catch (err) {
@@ -1376,10 +1376,15 @@ async function main(): Promise<void> {
             updateRuntimeProxyAssignment(accountKey, { accountId: discordId, username: client.user?.username ?? '', connected: true, lastError: null, direct: !proxyAssignment?.proxy });
             db.execute(`DELETE FROM ${KEYSPACE}.failed_accounts WHERE account_id = ?`, [discordId]).catch(() => {});
             deleteFailedRowsByTokenHint(db, tokenHint).catch(() => {});
+            // HOT-RELOAD FIX: account_info da yazılmalı — ilk login akışıyla tutarlı olsun
+            db.execute(
+              `INSERT INTO ${KEYSPACE}.account_info (account_id, discord_id, username, avatar, last_fetched) VALUES (?,?,?,?,?)`,
+              [discordId, discordId, client.user?.username ?? '', client.user?.avatar ?? '', new Date()],
+            ).catch((err: Error) => console.warn(`[accounts] account_info yazma hatası (hot-reload idx=${gIdx}): ${err?.message}`));
             db.execute(
               `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`,
               [acc.token.slice(-16), discordId, client.user?.username ?? '', new Date()],
-            ).catch(() => {});
+            ).catch((err: Error) => console.warn(`[accounts] token_account_map yazma hatası (hot-reload idx=${gIdx}): ${err?.message}`));
             const guildIds = await fetchGuildIds(acc.token, bundle?.agent);
             accountGuilds.set(discordId, guildIds);
             rebuildGuildToAccounts();

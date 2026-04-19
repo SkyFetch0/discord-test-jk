@@ -278,6 +278,9 @@ CREATE TABLE IF NOT EXISTS senneo.token_account_map (
   updated_at timestamp
 );
 
+-- Secondary index: account_id üzerinden token lookup için (ALLOW FILTERING yerine)
+CREATE INDEX IF NOT EXISTS ON senneo.token_account_map (account_id);
+
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- DASHBOARD AUTH — Kullanıcı yönetimi ve görev sistemi
 -- ═══════════════════════════════════════════════════════════════════════════════

@@ -43,18 +43,37 @@ function readAccountTokens(): string[] {
 
 async function getTokenForAccount(db: CassandraClient, accountId: string): Promise<string | null> {
   const tokens = readAccountTokens();
-  if (tokens.length === 0) return null;
+  if (tokens.length === 0) {
+    console.warn(`[auth] getTokenForAccount: accounts.json boş veya okunamadı (accountId=${accountId})`);
+    return null;
+  }
   try {
-    const mapRows = await db.execute(`SELECT token_key, account_id FROM ${KEYSPACE}.token_account_map`);
-    for (const row of mapRows.rows) {
-      if ((row['account_id'] as string) === accountId) {
-        const tokenKey = row['token_key'] as string;
-        const match = tokens.find(t => t.slice(-16) === tokenKey);
-        if (match) return match;
+    // Önce doğrudan accountId ile lookup yap (tek satır okur, tüm tablo taraması yapmaz)
+    const mapRow = await db.execute(
+      `SELECT token_key FROM ${KEYSPACE}.token_account_map WHERE account_id = ? ALLOW FILTERING`,
+      [accountId],
+    );
+    if (mapRow.rowLength > 0) {
+      const tokenKey = mapRow.rows[0]['token_key'] as string;
+      const match = tokens.find(t => t.slice(-16) === tokenKey);
+      if (match) return match;
+      console.warn(`[auth] getTokenForAccount: token_key=${tokenKey} DB'de var ama accounts.json'da eşleşme yok (accountId=${accountId})`);
+    } else {
+      // Fallback: tüm tabloyu tara — hesap belki farklı token_key ile kaydedilmiş
+      console.warn(`[auth] getTokenForAccount: ALLOW FILTERING ile eşleşme yok, tam tarama yapılıyor (accountId=${accountId})`);
+      const allRows = await db.execute(`SELECT token_key, account_id FROM ${KEYSPACE}.token_account_map`);
+      for (const row of allRows.rows) {
+        if ((row['account_id'] as string) === accountId) {
+          const tokenKey = row['token_key'] as string;
+          const match = tokens.find(t => t.slice(-16) === tokenKey);
+          if (match) return match;
+        }
       }
     }
-  } catch { /* table may not exist */ }
-  // Fallback: try account_info → accounts.json index mapping (less reliable)
+  } catch (err: any) {
+    console.error(`[auth] getTokenForAccount DB hatası (accountId=${accountId}):`, err?.message);
+  }
+  console.warn(`[auth] getTokenForAccount: accountId=${accountId} için token bulunamadı. token_account_map'te kayıt yok veya accounts.json güncel değil.`);
   return null;
 }
 
@@ -968,20 +987,34 @@ export function authRouter(db: CassandraClient): Router {
             ).catch(() => {});
           }
         }
-        if (!resolvedAccountId) { res.status(400).json({ error: 'Gorevde hesap bilgisi eksik — lutfen accountId alanini gonderin' }); return; }
+        if (!resolvedAccountId) {
+          res.status(400).json({ error: 'Görevde hesap bilgisi eksik — lütfen accountId alanını gönderin' });
+          return;
+        }
         const token = await getTokenForAccount(db, resolvedAccountId);
-        if (!token) { res.status(400).json({ error: 'Hesap tokeni bulunamadi — hesap sistemde aktif degil' }); return; }
+        if (!token) {
+          // Kullanıcıya daha açıklayıcı mesaj: hangi hesap, ne yapmalı
+          console.error(`[task] Token bulunamadı: accountId=${resolvedAccountId} guildId=${realGuildId} taskId=${taskId} user=${me.username}`);
+          res.status(400).json({
+            error: `Hesap tokeni bulunamadı (accountId: ${resolvedAccountId}). Accounts servisi yeniden başlatılmış veya token_account_map güncel olmayabilir. Yönetici ile iletişime geçin.`,
+            accountId: resolvedAccountId,
+          });
+          return;
+        }
 
         // 3. Verify guild membership via Discord API
         const isMember = await verifyGuildMembership(token, realGuildId);
         if (!isMember) {
-          // Send notification to the user
           const nid = genId();
           db.execute(
             `INSERT INTO ${KEYSPACE}.user_notifications (id, username, title, message, type, read, created_at) VALUES (?,?,?,?,?,?,?)`,
-            [nid, owner, 'Dogrulama Basarisiz', `${guildName || realGuildId} — Hesap sunucuya katilmamis. Davet linkiyle katildigindan ve dogru kanal ID girdiginizden emin olun.`, 'warning', false, now],
+            [nid, owner, 'Doğrulama Başarısız', `${guildName || realGuildId} — Hesap sunucuya katılmamış. Davet linki ile katıldığınızdan ve doğru guild ID girdiğinizden emin olun.`, 'warning', false, now],
           ).catch(() => {});
-          res.status(400).json({ error: 'Hesap sunucuya katilmamis. Davet linkiyle katildigindan ve dogru kanal ID girdiginizden emin olun.', verified: false });
+          res.status(400).json({
+            error: `Hesap sunucuya katılmamış (guildId: ${realGuildId}). Davet linki ile katıldığınızdan emin olun, ardından tekrar deneyin.`,
+            verified: false,
+            guildId: realGuildId,
+          });
           return;
         }
 
@@ -1004,29 +1037,33 @@ export function authRouter(db: CassandraClient): Router {
           return;
         }
 
-        const accountIdx = readAccountTokens().findIndex(t => t === token);
+        // accountIdx: accounts.json içindeki sıra indeksi — scraper'ın hangi hesabı kullanacağını belirler
+        // token_account_map'ten de alınabilir ama accounts.json sırası daha güvenilir
+        const allTokens = readAccountTokens();
+        const accountIdx = allTokens.findIndex(t => t === token);
 
         // 5. Add scrape targets with account_id
+        const resolvedAccountIdx = accountIdx >= 0 ? accountIdx : null;
         for (const channel of validatedChannels.channels) {
           await db.execute(
-            `INSERT INTO ${KEYSPACE}.scrape_targets (channel_id, guild_id, account_id, account_idx, pinned_account_id, pinned_account_idx, created_at) VALUES (?,?,?,?,?,?,?)`,
-            [channel.id, realGuildId, resolvedAccountId, accountIdx >= 0 ? accountIdx : null, resolvedAccountId, accountIdx >= 0 ? accountIdx : null, now],
-          ).catch(() => {});
+            `INSERT INTO ${KEYSPACE}.scrape_targets (channel_id, guild_id, label, account_id, account_idx, pinned_account_id, pinned_account_idx, created_at) VALUES (?,?,?,?,?,?,?,?)`,
+            [channel.id, realGuildId, channel.name ?? '', resolvedAccountId, resolvedAccountIdx, resolvedAccountId, resolvedAccountIdx, now],
+          ).catch((e: any) => console.warn(`[task] scrape_targets INSERT hatası (${channel.id}): ${e?.message}`));
           await db.execute(
             `INSERT INTO ${KEYSPACE}.account_targets_by_account (account_id, channel_id, guild_id, label, account_idx, active_account_id, active_account_idx, pinned_account_id, pinned_account_idx, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-            [resolvedAccountId, channel.id, realGuildId, channel.name, accountIdx >= 0 ? accountIdx : null, resolvedAccountId, accountIdx >= 0 ? accountIdx : null, resolvedAccountId, accountIdx >= 0 ? accountIdx : null, now],
-          ).catch(() => {});
+            [resolvedAccountId, channel.id, realGuildId, channel.name ?? '', resolvedAccountIdx, resolvedAccountId, resolvedAccountIdx, resolvedAccountId, resolvedAccountIdx, now],
+          ).catch((e: any) => console.warn(`[task] account_targets_by_account INSERT hatası (${channel.id}): ${e?.message}`));
           if (channel.name) {
             await db.execute(
-              `INSERT INTO ${KEYSPACE}.name_cache (id, name, kind) VALUES (?,?,?)`,
-              [channel.id, channel.name, 'channel'],
+              `INSERT INTO ${KEYSPACE}.name_cache (id, name, kind, icon) VALUES (?,?,?,?)`,
+              [channel.id, channel.name, 'channel', null],
             ).catch(() => {});
           }
         }
         if (guildName) {
           await db.execute(
-            `INSERT INTO ${KEYSPACE}.name_cache (id, name, kind) VALUES (?,?,?)`,
-            [realGuildId, guildName, 'guild'],
+            `INSERT INTO ${KEYSPACE}.name_cache (id, name, kind, icon) VALUES (?,?,?,?)`,
+            [realGuildId, guildName, 'guild', null],
           ).catch(() => {});
         }
 
@@ -1042,23 +1079,21 @@ export function authRouter(db: CassandraClient): Router {
         if (resolvedCode) {
           await db.execute(
             `UPDATE ${KEYSPACE}.invite_pool SET status = 'already_in', owner_account_id = ?, owner_account_name = ?, assigned_account_id = ?, assigned_account_name = ?, checked_at = ? WHERE invite_code = ?`,
-            [resolvedAccountId, accountName, null, null, now, resolvedCode],
-          ).catch(e => console.warn('[task] invite_pool update failed:', e?.message));
+            [resolvedAccountId, accountName || null, null, null, now, resolvedCode],
+          ).catch((e: any) => console.warn(`[task] invite_pool güncelleme hatası (${resolvedCode}): ${e?.message}`));
+        } else {
+          console.warn(`[task] invite_pool kaydı bulunamadı: guildId=${realGuildId} — görev tamamlandı ama pool güncellenemedi`);
         }
 
-        // 7. Update guild membership tables (critical for membership display)
-        try {
-          await db.execute(
-            `INSERT INTO ${KEYSPACE}.guild_accounts (guild_id, account_id, guild_name, last_synced) VALUES (?,?,?,?)`,
-            [realGuildId, resolvedAccountId, guildName, now],
-          );
-        } catch (e: any) { console.warn('[task] guild_accounts write failed:', e?.message); }
-        try {
-          await db.execute(
-            `INSERT INTO ${KEYSPACE}.account_guilds (account_id, guild_id, guild_name, guild_icon, guild_owner, last_synced) VALUES (?,?,?,?,?,?)`,
-            [resolvedAccountId, realGuildId, guildName, '', false, now],
-          );
-        } catch (e: any) { console.warn('[task] account_guilds write failed:', e?.message); }
+        // 7. Update guild membership tables (critical for membership display + guild-sync)
+        await db.execute(
+          `INSERT INTO ${KEYSPACE}.guild_accounts (guild_id, account_id, guild_name, last_synced) VALUES (?,?,?,?)`,
+          [realGuildId, resolvedAccountId, guildName || '', now],
+        ).catch((e: any) => console.warn(`[task] guild_accounts yazma hatası: ${e?.message}`));
+        await db.execute(
+          `INSERT INTO ${KEYSPACE}.account_guilds (account_id, guild_id, guild_name, guild_icon, guild_owner, last_synced) VALUES (?,?,?,?,?,?)`,
+          [resolvedAccountId, realGuildId, guildName || '', '', false, now],
+        ).catch((e: any) => console.warn(`[task] account_guilds yazma hatası: ${e?.message}`));
 
         // 8. Mark task completed
         await db.execute(
@@ -1069,10 +1104,16 @@ export function authRouter(db: CassandraClient): Router {
         // 9. Log
         const ip = getClientIp(req);
         logActivity(db, me.username, 'task_complete',
-          `${guildName || realGuildId} dogrulandi (${accountName}) — ${validatedChannels.channels.length} kanal eklendi`, ip);
+          `${guildName || realGuildId} doğrulandı (${accountName || resolvedAccountId}) — ${validatedChannels.channels.length} kanal eklendi, accountIdx=${resolvedAccountIdx ?? 'null'}`, ip);
 
-        console.log(`[task] ${me.username} completed guild_join: ${guildName} (${realGuildId}) via ${accountName} — ${validatedChannels.channels.length} channels, invite_pool → already_in`);
-        res.json({ ok: true, verified: true, targetsAdded: validatedChannels.channels.length });
+        console.log(`[task] ${me.username} guild_join tamamladı: ${guildName} (${realGuildId}) — hesap=${accountName || resolvedAccountId} accountIdx=${resolvedAccountIdx ?? 'null'} — ${validatedChannels.channels.length} kanal scrape_targets'a eklendi`);
+        res.json({
+          ok: true,
+          verified: true,
+          targetsAdded: validatedChannels.channels.length,
+          channels: validatedChannels.channels.map(c => ({ id: c.id, name: c.name })),
+          accountIdx: resolvedAccountIdx,
+        });
         return;
       }
 

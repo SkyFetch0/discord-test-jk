@@ -88,6 +88,21 @@ build:
 	@npm run build -w @senneo/bot
 	@echo "✅ Derleme tamamlandı"
 
+# ── Docker Build (sıralı — shared/dist sorunu yaşanmaz) ───────────────
+docker-build:
+	@echo "🐳 Docker image'ları sırayla build ediliyor..."
+	@docker build --no-cache -t senneo-base-img --target base .
+	@docker compose build --no-cache api
+	@docker compose build --no-cache accounts
+	@docker compose build --no-cache ingester
+	@docker compose build --no-cache bot
+	@echo "✅ Docker build tamamlandı"
+
+docker-deploy: docker-build
+	@echo "🚀 Container'lar yeniden başlatılıyor..."
+	@docker compose up -d
+	@echo "✅ Deploy tamamlandı"
+
 # ── Infrastructure ─────────────────────────────────
 start-infra:
 	@echo "🐳 Docker servisleri başlatılıyor..."
