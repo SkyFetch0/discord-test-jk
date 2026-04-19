@@ -327,6 +327,7 @@ services:
       - CLICKHOUSE_DB=${CLICKHOUSE_DB:-senneo_messages}
       - CLICKHOUSE_MSG_DB=${CLICKHOUSE_MSG_DB:-senneo_messages}
       - CLICKHOUSE_USR_DB=${CLICKHOUSE_USR_DB:-senneo_users}
+      - CLICKHOUSE_OPS_DB=${CLICKHOUSE_OPS_DB:-senneo_operations}
       - SCYLLA_HOSTS=scylla
       - SCYLLA_KEYSPACE=${SCYLLA_KEYSPACE:-senneo}
       - KAFKA_BROKERS=redpanda:29092

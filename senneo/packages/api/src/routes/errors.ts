@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { ClickHouseClient } from '@clickhouse/client';
 
-const CH_DB = process.env.CLICKHOUSE_DB ?? 'senneo_operations';
+// error_log senneo_operations veritabanında — CLICKHOUSE_DB (senneo_messages) ile karıştırma
+const CH_DB = process.env.CLICKHOUSE_OPS_DB ?? 'senneo_operations';
 
 const CH_QUERY_SAFETY = {
   max_rows_to_read: '5000000',

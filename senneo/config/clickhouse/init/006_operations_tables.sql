@@ -50,10 +50,13 @@ CREATE TABLE IF NOT EXISTS senneo_operations.error_log
     count                   UInt32              DEFAULT 1           CODEC(ZSTD(1)),
 
     -- İlgili bağlam (opsiyonel, hata kaynağına göre doldurulur)
-    channel_id              UInt64              DEFAULT 0           CODEC(ZSTD(1)),
-    guild_id                UInt64              DEFAULT 0           CODEC(ZSTD(1)),
+    channel_id              String              DEFAULT ''          CODEC(ZSTD(1)),
+    guild_id                String              DEFAULT ''          CODEC(ZSTD(1)),
     account_id              String              DEFAULT ''          CODEC(ZSTD(1)),
+    account_idx             Int32               DEFAULT -1          CODEC(ZSTD(1)),
     error_code              String              DEFAULT ''          CODEC(ZSTD(1)),
+    kafka_topic             String              DEFAULT ''          CODEC(ZSTD(1)),
+    correlation_id          String              DEFAULT ''          CODEC(ZSTD(1)),
 
     inserted_at             DateTime64(3, 'UTC') DEFAULT now64(3, 'UTC')
                                                                     CODEC(DoubleDelta, ZSTD(1))
