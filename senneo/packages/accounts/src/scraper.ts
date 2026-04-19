@@ -315,6 +315,14 @@ async function rawFetchMessages(
     throw err;
   }
 
+  if (statusCode === 401) {
+    // Token geçersiz — üst katmana terminal hata olarak ilet, retry yapılmasın
+    const err: any = new Error(`HTTP 401: ${bodyText.slice(0, 200)}`);
+    err.status = 401;
+    err.httpStatus = 401;
+    throw err;
+  }
+
   if (statusCode === 403) {
     const err: any = new Error('Forbidden (403)');
     err.status = 403;
@@ -526,8 +534,9 @@ export async function scrapeChannel(
   // Use raw HTTP if token is provided (5x faster than discord.js REST manager)
   const useRawHttp = !!token;
   const fetchMode = useRawHttp ? 'raw-http' : 'discord.js';
+  const proxyHint = proxyUrl ? proxyUrl.replace(/\/\/.*?@/, '//<creds>@') : 'DIRECT';
 
-  console.log(`[scraper] ${channelId} | cursor=${cursor} | scraped=${totalScraped} | delay=${adaptiveDelay}ms | maxBatches=${maxBatchesPerRun === Infinity ? '∞' : maxBatchesPerRun} | mode=${fetchMode}`);
+  console.log(`[scraper] ${channelId} | cursor=${cursor} | scraped=${totalScraped} | delay=${adaptiveDelay}ms | maxBatches=${maxBatchesPerRun === Infinity ? '∞' : maxBatchesPerRun} | mode=${fetchMode} | proxy=${proxyHint}`);
   emit('scrape_start', `${channelId} scrape baslatildi`, { channelId, guildId, detail: `cursor=${cursor} scraped=${totalScraped} mode=${fetchMode}` });
 
   // ── Raw HTTP fetch result type (plain array, not Map) ──
@@ -574,8 +583,14 @@ export async function scrapeChannel(
           continue;
         }
 
+        if (e?.httpStatus === 401 || e?.status === 401) {
+          // 401 = token geçersiz — retry yapmanın anlamı yok, terminal hata
+          console.error(`[scraper] ${channelId} HTTP 401 — TOKEN GEÇERSİZ, scrape durduruluyor (accountId=${accountId ?? '-'} proxy=${proxyHint})`);
+          recordError(channelId, 'token invalid (401) — terminal');
+          return { rawMessages: null, result: { kind: 'error_terminal', code: 'discord_401', reason: 'token invalid (401)' } };
+        }
         if (e?.httpStatus === 403 || e?.status === 403) {
-          console.warn(`[scraper] ${channelId} HTTP 403 — erişim yok (accountId=${accountId ?? '-'})`);
+          console.warn(`[scraper] ${channelId} HTTP 403 — erişim yok (accountId=${accountId ?? '-'} proxy=${proxyHint})`);
           recordError(channelId, 'no permission (403)');
           return { rawMessages: null, result: { kind: 'error_terminal', code: 'discord_403', reason: 'no permission (403)' } };
         }
@@ -589,7 +604,7 @@ export async function scrapeChannel(
         const wait = backoffMs(attempt);
         const errMsg = e?.message ?? String(e);
         const errCode = e?.code ?? e?.status ?? 'unknown';
-        console.warn(`[scraper] ${channelId} fetch hatası attempt=${attempt}/${MAX_RETRIES} code=${errCode} waitMs=${wait} — ${errMsg}`);
+        console.warn(`[scraper] ${channelId} fetch hatası attempt=${attempt}/${MAX_RETRIES} code=${errCode} waitMs=${wait} proxy=${proxyHint} — ${errMsg}`);
         recordError(channelId, `fetch error attempt ${attempt}: ${errMsg}`);
         if (attempt < MAX_RETRIES && !(await waitFor(wait, signal))) {
           return { rawMessages: null, result: { kind: 'aborted', code: 'abort_signal', reason: 'abort signal received' } };
