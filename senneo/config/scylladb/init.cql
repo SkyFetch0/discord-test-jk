@@ -275,6 +275,7 @@ CREATE TABLE IF NOT EXISTS senneo.token_account_map (
   token_key  text PRIMARY KEY,
   account_id text,
   username   text,
+  full_token text,
   updated_at timestamp
 );
 

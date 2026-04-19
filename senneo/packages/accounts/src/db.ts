@@ -333,9 +333,14 @@ async function initSchema(db: Client): Promise<void> {
       token_key    text PRIMARY KEY,
       account_id   text,
       username     text,
+      full_token   text,
       updated_at   timestamp
     )
   `);
+  // Migration: full_token kolonu yoksa ekle (mevcut kurulumlar için)
+  await db.execute(`ALTER TABLE ${KEYSPACE}.token_account_map ADD full_token text`).catch(() => {});
+  // Secondary index for account_id lookups (no ALLOW FILTERING)
+  await db.execute(`CREATE INDEX IF NOT EXISTS ON ${KEYSPACE}.token_account_map (account_id)`).catch(() => {});
 
   console.log('[db] Schema ready');
 }

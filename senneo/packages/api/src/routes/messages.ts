@@ -1,6 +1,4 @@
 import { Router, Request, Response } from 'express';
-import path from 'path';
-import fs from 'fs';
 import { ClickHouseClient } from '@clickhouse/client';
 import { Client as CassandraClient } from 'cassandra-driver';
 import { enrichMessagesWithNames } from './name-resolve';
@@ -32,7 +30,7 @@ function isValidIso(s: string): boolean {
   return !isNaN(Date.parse(s));
 }
 
-export function messagesRouter(scylla: CassandraClient, ch: ClickHouseClient): Router {
+export function messagesRouter(db: CassandraClient, ch: ClickHouseClient): Router {
   const router = Router();
 
   // ── GET /messages/count ───────────────────────────────────────────────────
@@ -182,7 +180,7 @@ export function messagesRouter(scylla: CassandraClient, ch: ClickHouseClient): R
   });
 
   // ── POST /messages/badges/enrich — fetch Discord profiles to get full public_flags ──
-  const ACCOUNTS_FILE = path.resolve(__dirname, '../../../../accounts.json');
+  const SCYLLA_KEYSPACE_MSG = process.env.SCYLLA_KEYSPACE ?? 'senneo';
   let _enrichJob: { running: boolean; processed: number; updated: number; total: number; errors: number } | null = null;
 
   function discordGetUser(token: string, userId: string): Promise<{ id: string; public_flags?: number } | null> {
@@ -193,10 +191,17 @@ export function messagesRouter(scylla: CassandraClient, ch: ClickHouseClient): R
     if (_enrichJob?.running) return res.json({ ok: false, message: 'Already running', ..._enrichJob });
     const limit = Math.min(parseInt(req.body?.limit ?? '5000', 10) || 5000, 50000);
 
+    // DB'den full_token al (accounts.json bağımlılığı yok)
     let tokens: string[] = [];
-    try { tokens = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf-8'))?.accounts?.map((a: any) => a.token) ?? []; }
-    catch { return res.status(500).json({ error: 'Cannot read accounts.json' }); }
-    if (tokens.length === 0) return res.status(400).json({ error: 'No tokens available' });
+    try {
+      const rows = await db.execute(`SELECT full_token FROM ${SCYLLA_KEYSPACE_MSG}.token_account_map`);
+      tokens = rows.rows
+        .map(r => (r['full_token'] as string) ?? '')
+        .filter(t => t.length > 20);
+    } catch (err: any) {
+      return res.status(500).json({ error: `Token listesi alınamadı: ${err?.message}` });
+    }
+    if (tokens.length === 0) return res.status(400).json({ error: 'Aktif token bulunamadı (token_account_map boş veya full_token eksik)' });
 
     _enrichJob = { running: true, processed: 0, updated: 0, total: 0, errors: 0 };
     res.json({ ok: true, message: 'Enrichment started', limit });

@@ -12,7 +12,23 @@ const ACCOUNTS_FILE = path.resolve(process.cwd(), 'accounts.json');
 const ACC_COLORS    = ['#0a84ff','#32d74b','#bf5af2','#ff9f0a','#ff453a','#5e5ce6','#ff6b35','#30d158'];
 const TEXT_CHANNEL_TYPES = new Set([0, 5, 10, 11, 12]);
 
-// -- Accounts (still JSON  tokens should not go in DB) ----------------
+// -- Accounts: DB-first, JSON fallback (geçiş dönemi) ----------------
+// DB'den tüm aktif tokenları çeker (full_token kolonu dolu olanlar)
+async function readAccountsFromDb(db: CassandraClient): Promise<{ token: string; accountId: string; username: string; tokenKey: string }[]> {
+  try {
+    const rows = await db.execute(`SELECT token_key, account_id, username, full_token FROM ${KEYSPACE}.token_account_map`);
+    return rows.rows
+      .filter(r => ((r['full_token'] as string) ?? '').length > 20)
+      .map(r => ({
+        token:     r['full_token'] as string,
+        accountId: (r['account_id'] as string) ?? '',
+        username:  (r['username']  as string) ?? '',
+        tokenKey:  (r['token_key'] as string) ?? '',
+      }));
+  } catch { return []; }
+}
+
+// accounts.json'u da okur — accounts servisi hâlâ oradan çalışıyor, senkron tutmak için
 function readAccounts(): { token: string }[] {
   try {
     if (!fs.existsSync(ACCOUNTS_FILE)) return [];
@@ -172,34 +188,58 @@ interface DiscordChannelInfo { id?: string; guild_id?: string; name?: string; ty
 const _cache: Record<string, { ts: number; user?: DiscordUser; guilds?: DiscordGuild[]; error?: string }> = {};
 const TTL = 15_000;
 
-// Persistent mapping: token key (last 16 chars) → Discord account info.
-// Populated when tokens are valid; used to identify accounts when tokens become invalid.
-const _knownAccounts: Record<string, { accountId: string; username: string }> = {};
+// Persistent mapping: token key (last 16 chars) → Discord account info + full token.
+// Populated from DB on first call; updated when tokens are validated.
+const _knownAccounts: Record<string, { accountId: string; username: string; fullToken?: string }> = {};
 let _knownAccountsLoaded = false;
 
 async function ensureKnownAccountsLoaded(db: CassandraClient): Promise<void> {
   if (_knownAccountsLoaded) return;
   _knownAccountsLoaded = true;
   try {
-    const mapRows = await db.execute(`SELECT token_key, account_id, username FROM ${KEYSPACE}.token_account_map`);
+    const mapRows = await db.execute(`SELECT token_key, account_id, username, full_token FROM ${KEYSPACE}.token_account_map`);
     for (const r of mapRows.rows) {
       const tk = r['token_key'] as string;
-      if (tk) _knownAccounts[tk] = { accountId: r['account_id'] as string, username: (r['username'] as string) ?? '' };
+      if (tk) _knownAccounts[tk] = {
+        accountId: r['account_id'] as string,
+        username:  (r['username']  as string) ?? '',
+        fullToken: (r['full_token'] as string) ?? undefined,
+      };
     }
   } catch { /* table may not exist yet */ }
 }
 
+// DB'den full_token ile token al (accounts.json'a bağımlılık yok)
+async function getFullTokenByAccountId(db: CassandraClient, accountId: string): Promise<string | null> {
+  try {
+    const row = await db.execute(
+      `SELECT full_token FROM ${KEYSPACE}.token_account_map WHERE account_id = ?`,
+      [accountId],
+    );
+    const ft = (row.rows[0]?.['full_token'] as string) ?? '';
+    return ft.length > 20 ? ft : null;
+  } catch { return null; }
+}
+
 function findAccountIdxById(accounts: { token: string }[], accountId: string): number {
   for (let i = 0; i < accounts.length; i++) {
-    const known = _knownAccounts[accounts[i].token.slice(-16)];
+    const key = accounts[i].token.slice(-16);
+    const known = _knownAccounts[key];
     if (known?.accountId === accountId) return i;
   }
   return -1;
 }
 
+// DB tabanlı idx: full_token'ların sırasına göre (accounts.json sırasıyla eşleşir)
+function findAccountIdxByIdFromMap(accountId: string): number {
+  const entries = Object.entries(_knownAccounts)
+    .filter(([, v]) => v.fullToken && v.fullToken.length > 20);
+  const idx = entries.findIndex(([, v]) => v.accountId === accountId);
+  return idx;
+}
+
 async function resolveGuildEligibleAccounts(db: CassandraClient, guildId: string): Promise<Array<{ accountId: string; idx: number; username: string }>> {
   await ensureKnownAccountsLoaded(db);
-  const accounts = readAccounts();
   const [guildRows, infoRows] = await Promise.all([
     db.execute(`SELECT account_id FROM ${KEYSPACE}.guild_accounts WHERE guild_id = ?`, [guildId]).catch(() => null),
     db.execute(`SELECT account_id, username FROM ${KEYSPACE}.account_info`).catch(() => null),
@@ -207,34 +247,24 @@ async function resolveGuildEligibleAccounts(db: CassandraClient, guildId: string
   const usernameById = new Map<string, string>();
   for (const row of infoRows?.rows ?? []) usernameById.set((row['account_id'] as string) ?? '', (row['username'] as string) ?? '');
   const eligibleIds = new Set<string>((guildRows?.rows ?? []).map(r => (r['account_id'] as string) ?? '').filter(Boolean));
-  let resolved = accounts
+
+  // DB'den full_token içeren kayıtları kullan (accounts.json bağımlılığı yok)
+  const dbAccounts = await readAccountsFromDb(db);
+  let resolved = dbAccounts
     .map((acc, idx) => {
-      const accountId = _knownAccounts[acc.token.slice(-16)]?.accountId;
-      if (!accountId || !eligibleIds.has(accountId)) return null;
-      return { accountId, idx, username: usernameById.get(accountId) ?? '' };
+      if (!eligibleIds.has(acc.accountId)) return null;
+      return { accountId: acc.accountId, idx, username: usernameById.get(acc.accountId) ?? acc.username };
     })
     .filter((row): row is { accountId: string; idx: number; username: string } => row != null);
 
   if (resolved.length > 0) return resolved;
 
-  const liveResolved = await Promise.all(accounts.map(async (acc, idx) => {
+  // Fallback: Discord API ile canlı kontrol
+  const liveResolved = await Promise.all(dbAccounts.map(async (acc, idx) => {
     try {
       const guilds = await discordGet('/users/@me/guilds', acc.token) as Array<{ id: string }>;
       if (!Array.isArray(guilds) || !guilds.some(g => g.id === guildId)) return null;
-      let accountId = _knownAccounts[acc.token.slice(-16)]?.accountId;
-      let username = _knownAccounts[acc.token.slice(-16)]?.username ?? '';
-      if (!accountId) {
-        const me = await discordGet('/users/@me', acc.token) as { id?: string; username?: string };
-        if (!me?.id) return null;
-        accountId = me.id;
-        username = me.username ?? '';
-        _knownAccounts[acc.token.slice(-16)] = { accountId, username };
-        await db.execute(
-          `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`,
-          [acc.token.slice(-16), accountId, username, new Date()],
-        ).catch(() => {});
-      }
-      return { accountId, idx, username: username || usernameById.get(accountId) || '' };
+      return { accountId: acc.accountId, idx, username: acc.username || usernameById.get(acc.accountId) || '' };
     } catch {
       return null;
     }
@@ -243,33 +273,38 @@ async function resolveGuildEligibleAccounts(db: CassandraClient, guildId: string
   return resolved;
 }
 
-async function validateChannelViaAccounts(guildId: string, channelId: string): Promise<{ ok: true; guildId: string; channelName?: string } | { ok: false; error: string }> {
-  const accounts = readAccounts();
-  if (!accounts.length) return { ok: false, error: 'Hesap yok' };
-  for (const acc of accounts) {
+async function validateChannelViaAccounts(db: CassandraClient, guildId: string, channelId: string): Promise<{ ok: true; guildId: string; channelName?: string } | { ok: false; error: string }> {
+  const dbAccounts = await readAccountsFromDb(db);
+  if (!dbAccounts.length) return { ok: false, error: 'Hesap yok — token_account_map boş' };
+  for (const acc of dbAccounts) {
     try {
       const channel = await discordGet(`/channels/${channelId}`, acc.token) as DiscordChannelInfo;
       if (!channel?.id) continue;
-      if (channel.guild_id !== guildId) return { ok: false, error: 'Kanal secilen sunucuya ait degil' };
-      if (channel.type == null || !TEXT_CHANNEL_TYPES.has(channel.type)) return { ok: false, error: 'Yalnizca metin kanallari kabul edilir' };
+      if (channel.guild_id !== guildId) return { ok: false, error: 'Kanal seçilen sunucuya ait değil' };
+      if (channel.type == null || !TEXT_CHANNEL_TYPES.has(channel.type)) return { ok: false, error: 'Yalnızca metin kanalları kabul edilir' };
       return { ok: true, guildId: channel.guild_id, channelName: channel.name ?? undefined };
     } catch { /* try next account */ }
   }
-  return { ok: false, error: 'Kanal dorulanamadi; hicbir hesap erisemedi' };
+  return { ok: false, error: 'Kanal doğrulanamadı; hiçbir hesap erişemedi' };
 }
 
 async function getActiveAccountToken(db: CassandraClient, accountId: string): Promise<{ token: string; idx: number; username: string } | null> {
-  await ensureKnownAccountsLoaded(db);
-  const accounts = readAccounts();
-  const directIdx = findAccountIdxById(accounts, accountId);
-  if (directIdx >= 0 && accounts[directIdx]?.token) {
+  // DB'den doğrudan full_token al (accounts.json bağımlılığı yok)
+  const fullToken = await getFullTokenByAccountId(db, accountId);
+  if (fullToken) {
+    await ensureKnownAccountsLoaded(db);
+    const dbAccounts = await readAccountsFromDb(db);
+    const idx = dbAccounts.findIndex(a => a.accountId === accountId);
     return {
-      token: accounts[directIdx].token,
-      idx: directIdx,
-      username: _knownAccounts[accounts[directIdx].token.slice(-16)]?.username ?? '',
+      token: fullToken,
+      idx: idx >= 0 ? idx : -1,
+      username: _knownAccounts[fullToken.slice(-16)]?.username ?? '',
     };
   }
 
+  // Fallback: hesap belki full_token'sız kaydedilmiş — accounts.json'dan dene
+  await ensureKnownAccountsLoaded(db);
+  const accounts = readAccounts();
   for (let idx = 0; idx < accounts.length; idx++) {
     const token = accounts[idx]?.token;
     if (!token) continue;
@@ -277,10 +312,10 @@ async function getActiveAccountToken(db: CassandraClient, accountId: string): Pr
       const me = await discordGet('/users/@me', token) as { id?: string; username?: string };
       if (!me?.id) continue;
       const username = me.username ?? '';
-      _knownAccounts[token.slice(-16)] = { accountId: me.id, username };
+      _knownAccounts[token.slice(-16)] = { accountId: me.id, username, fullToken: token };
       await db.execute(
-        `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`,
-        [token.slice(-16), me.id, username, new Date()],
+        `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, full_token, updated_at) VALUES (?,?,?,?,?)`,
+        [token.slice(-16), me.id, username, token, new Date()],
       ).catch(() => {});
       if (me.id === accountId) return { token, idx, username };
     } catch {
@@ -358,13 +393,13 @@ async function getAccountInfo(idx: number, assignedTargets: ScrapeTarget[], db?:
     }
   }
 
-  // Persist token→account mapping when token is valid
+  // Persist token→account mapping when token is valid (full_token dahil)
   if (user?.id) {
-    _knownAccounts[key] = { accountId: user.id, username: user.username ?? '' };
+    _knownAccounts[key] = { accountId: user.id, username: user.username ?? '', fullToken: token };
     if (db) {
       db.execute(
-        `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`,
-        [key, user.id, user.username ?? '', new Date()],
+        `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, full_token, updated_at) VALUES (?,?,?,?,?)`,
+        [key, user.id, user.username ?? '', token, new Date()],
       ).catch(() => {});
     }
   }
@@ -613,10 +648,10 @@ export function accountsRouter(db: CassandraClient): Router {
           console.error('[accounts-api] account_info upsert failed:', err);
         });
 
-        // Save token → account mapping (needed for task verification via getTokenForAccount)
+        // Save token → account mapping with full_token (DB-first, accounts.json bağımlılığı ortadan kalkar)
         await db.execute(
-          `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`,
-          [trimmed.slice(-16), accountId, username, now],
+          `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, full_token, updated_at) VALUES (?,?,?,?,?)`,
+          [trimmed.slice(-16), accountId, username, trimmed, now],
         ).catch(() => {});
 
         // Ensure category exists for this account (guild inventory needs it for HESAPLAR list)
@@ -1163,7 +1198,7 @@ export function accountsRouter(db: CassandraClient): Router {
     if (!guildId?.trim() || !channelId?.trim()) return res.status(400).json({ error: 'guildId ve channelId zorunlu' });
     if (!/^\d{17,20}$/.test(guildId) || !/^\d{17,20}$/.test(channelId)) return res.status(400).json({ error: 'Geersiz Discord Snowflake' });
 
-    const validated = await validateChannelViaAccounts(guildId.trim(), channelId.trim());
+    const validated = await validateChannelViaAccounts(db, guildId.trim(), channelId.trim());
     if (!validated.ok) return res.status(400).json({ error: validated.error });
 
     const targets = await readTargets(db);

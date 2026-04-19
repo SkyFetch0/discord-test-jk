@@ -2,14 +2,13 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { Client as CassandraClient } from 'cassandra-driver';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
 import { discordApiGet as discordProxyGet } from '../discord-proxy';
 
 const KEYSPACE   = process.env.SCYLLA_KEYSPACE ?? 'senneo';
 const JWT_EXPIRY = process.env.JWT_EXPIRY      ?? '7d';
 const IS_PROD    = process.env.NODE_ENV === 'production';
+const TEXT_CHANNEL_TYPES = new Set([0, 5, 10, 11, 12]);
 
 // FIX #1: No insecure hardcoded fallback.
 // Production MUST set JWT_SECRET env var. Dev gets a random ephemeral secret
@@ -30,51 +29,44 @@ const COOKIE_NAME = 'senneo_token';
 const COOKIE_SECURE = process.env.COOKIE_SECURE != null
   ? ['true', '1', 'yes'].includes(process.env.COOKIE_SECURE.toLowerCase())
   : IS_PROD;
-const ACCOUNTS_FILE = path.resolve(process.cwd(), 'accounts.json');
-const TEXT_CHANNEL_TYPES = new Set([0, 5, 10, 11, 12]);
 
 // ── Discord API helpers for task verification ────────────────────────────
-function readAccountTokens(): string[] {
+
+// Tüm aktif tokenları DB'den çeker (accounts.json'a bağımlılık yok)
+async function getAllTokensFromDb(db: CassandraClient): Promise<string[]> {
   try {
-    if (!fs.existsSync(ACCOUNTS_FILE)) return [];
-    return (JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf-8'))?.accounts ?? []).map((a: any) => a.token as string);
-  } catch { return []; }
+    const rows = await db.execute(`SELECT full_token FROM ${KEYSPACE}.token_account_map`);
+    return rows.rows
+      .map(r => (r['full_token'] as string) ?? '')
+      .filter(t => t.length > 20);
+  } catch (err: any) {
+    console.error('[auth] getAllTokensFromDb hatası:', err?.message);
+    return [];
+  }
 }
 
+// accountId → full token, tamamen DB'den
 async function getTokenForAccount(db: CassandraClient, accountId: string): Promise<string | null> {
-  const tokens = readAccountTokens();
-  if (tokens.length === 0) {
-    console.warn(`[auth] getTokenForAccount: accounts.json boş veya okunamadı (accountId=${accountId})`);
-    return null;
-  }
   try {
-    // Önce doğrudan accountId ile lookup yap (tek satır okur, tüm tablo taraması yapmaz)
-    const mapRow = await db.execute(
-      `SELECT token_key FROM ${KEYSPACE}.token_account_map WHERE account_id = ? ALLOW FILTERING`,
+    // Secondary index üzerinden doğrudan lookup (tek satır, O(1))
+    const row = await db.execute(
+      `SELECT full_token, token_key FROM ${KEYSPACE}.token_account_map WHERE account_id = ?`,
       [accountId],
     );
-    if (mapRow.rowLength > 0) {
-      const tokenKey = mapRow.rows[0]['token_key'] as string;
-      const match = tokens.find(t => t.slice(-16) === tokenKey);
-      if (match) return match;
-      console.warn(`[auth] getTokenForAccount: token_key=${tokenKey} DB'de var ama accounts.json'da eşleşme yok (accountId=${accountId})`);
-    } else {
-      // Fallback: tüm tabloyu tara — hesap belki farklı token_key ile kaydedilmiş
-      console.warn(`[auth] getTokenForAccount: ALLOW FILTERING ile eşleşme yok, tam tarama yapılıyor (accountId=${accountId})`);
-      const allRows = await db.execute(`SELECT token_key, account_id FROM ${KEYSPACE}.token_account_map`);
-      for (const row of allRows.rows) {
-        if ((row['account_id'] as string) === accountId) {
-          const tokenKey = row['token_key'] as string;
-          const match = tokens.find(t => t.slice(-16) === tokenKey);
-          if (match) return match;
-        }
-      }
+    if (row.rowLength > 0) {
+      const fullToken = (row.rows[0]['full_token'] as string) ?? '';
+      if (fullToken.length > 20) return fullToken;
+      // full_token kolonu dolmamış (eski kayıt) — token_key ile bilgi ver
+      const tokenKey = (row.rows[0]['token_key'] as string) ?? '';
+      console.warn(`[auth] getTokenForAccount: accountId=${accountId} için full_token boş (eski kayıt, token_key=${tokenKey}). Hesap yeniden login olunca güncellenecek.`);
+      return null;
     }
+    console.warn(`[auth] getTokenForAccount: accountId=${accountId} token_account_map'te bulunamadı. Hesap henüz giriş yapmamış olabilir.`);
+    return null;
   } catch (err: any) {
     console.error(`[auth] getTokenForAccount DB hatası (accountId=${accountId}):`, err?.message);
+    return null;
   }
-  console.warn(`[auth] getTokenForAccount: accountId=${accountId} için token bulunamadı. token_account_map'te kayıt yok veya accounts.json güncel değil.`);
-  return null;
 }
 
 function discordApiGet(endpoint: string, token: string): Promise<any> {
@@ -1037,10 +1029,14 @@ export function authRouter(db: CassandraClient): Router {
           return;
         }
 
-        // accountIdx: accounts.json içindeki sıra indeksi — scraper'ın hangi hesabı kullanacağını belirler
-        // token_account_map'ten de alınabilir ama accounts.json sırası daha güvenilir
-        const allTokens = readAccountTokens();
-        const accountIdx = allTokens.findIndex(t => t === token);
+        // accountIdx: token_account_map'teki kayıt sırası (DB-driven, accounts.json bağımlılığı yok)
+        // Scraper worker zaten accounts.json'dan kendi idx'ini biliyor; burada null geçmek güvenli
+        // ama mümkünse DB'den hesaplıyoruz (token_key ile eşleşen sıra)
+        const allTokenRows = await db.execute(`SELECT token_key, full_token FROM ${KEYSPACE}.token_account_map`).catch(() => null);
+        const allTokenList = (allTokenRows?.rows ?? [])
+          .map(r => (r['full_token'] as string) ?? '')
+          .filter(t => t.length > 20);
+        const accountIdx = allTokenList.findIndex(t => t === token);
 
         // 5. Add scrape targets with account_id
         const resolvedAccountIdx = accountIdx >= 0 ? accountIdx : null;

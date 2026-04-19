@@ -124,50 +124,66 @@ const ACC_TOKEN_MAP_TTL = 10 * 60_000; // 10 minutes
 
 async function getAccountTokenMap(db: CassandraClient): Promise<Map<string, string>> {
   if (_accTokenMap && Date.now() - _accTokenMapTs < ACC_TOKEN_MAP_TTL) return _accTokenMap;
-  const tokens = readTokens();
   const map = new Map<string, string>();
 
-  // Phase 1: Fast path — resolve via token_account_map (Scylla, no Discord API)
-  const tokenKeyToToken = new Map<string, string>();
-  for (const t of tokens) tokenKeyToToken.set(t.slice(-16), t);
-
-  const unresolvedTokens: string[] = [];
+  // Phase 1: DB'den full_token ile direkt çek — accounts.json gerekmez
   try {
-    const mapRows = await db.execute(`SELECT token_key, account_id FROM ${KEYSPACE}.token_account_map`, [], P);
+    const mapRows = await db.execute(`SELECT account_id, full_token FROM ${KEYSPACE}.token_account_map`, [], P);
     for (const row of mapRows.rows) {
-      const tk = row['token_key'] as string;
       const accId = row['account_id'] as string;
-      const token = tokenKeyToToken.get(tk);
-      if (token && accId) {
-        map.set(accId, token);
-        tokenKeyToToken.delete(tk); // resolved
-      }
+      const ft = (row['full_token'] as string) ?? '';
+      if (accId && ft.length > 20) map.set(accId, ft);
     }
   } catch { /* table may not exist */ }
 
-  // Remaining tokens not in token_account_map → need Discord API
-  for (const [, token] of tokenKeyToToken) unresolvedTokens.push(token);
-
-  // Phase 2: Slow path — only for unresolved tokens (new accounts)
-  if (unresolvedTokens.length > 0) {
-    console.log(`[token-map] ${map.size} resolved from cache, ${unresolvedTokens.length} need Discord API`);
-    for (let i = 0; i < unresolvedTokens.length; i++) {
-      try {
-        const u = await discordGet('/users/@me', unresolvedTokens[i]) as any;
-        if (u?.id) {
-          map.set(u.id as string, unresolvedTokens[i]);
-          const tk = unresolvedTokens[i].slice(-16);
-          await db.execute(
-            `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`,
-            [tk, u.id, u.username ?? '', new Date()], P,
-          ).catch(() => {});
-          await db.execute(
-            `INSERT INTO ${KEYSPACE}.account_info (account_id, discord_id, username, avatar, last_fetched) VALUES (?,?,?,?,?)`,
-            [u.id, u.id, u.username ?? '', u.avatar ?? '', new Date()], P,
+  // Phase 2: Fallback — full_token'sız (eski kayıt) olanlar için accounts.json'dan eşleştir
+  const tokens = readTokens();
+  if (tokens.length > 0 && map.size < tokens.length) {
+    const tokenKeyToToken = new Map<string, string>();
+    for (const t of tokens) tokenKeyToToken.set(t.slice(-16), t);
+    try {
+      const mapRows2 = await db.execute(`SELECT token_key, account_id, full_token FROM ${KEYSPACE}.token_account_map`, [], P);
+      for (const row of mapRows2.rows) {
+        const accId = row['account_id'] as string;
+        if (map.has(accId)) continue; // zaten full_token'dan çözüldü
+        const tk = row['token_key'] as string;
+        const token = tokenKeyToToken.get(tk);
+        if (token && accId) {
+          map.set(accId, token);
+          // Eksik full_token'ı DB'ye yaz
+          db.execute(
+            `UPDATE ${KEYSPACE}.token_account_map SET full_token = ? WHERE token_key = ?`,
+            [token, tk], P,
           ).catch(() => {});
         }
-      } catch {}
-      if (i < unresolvedTokens.length - 1) await new Promise((r) => setTimeout(r, 1500));
+      }
+    } catch {}
+
+    // Phase 3: accounts.json'da olup DB'de hiç kayıt olmayan tokenlar — Discord API'den çöz
+    const unresolvedTokens = tokens.filter(t => {
+      const key = t.slice(-16);
+      return ![...map.values()].find(v => v.slice(-16) === key);
+    });
+    if (unresolvedTokens.length > 0) {
+      console.log(`[token-map] ${map.size} DB'den çözüldü, ${unresolvedTokens.length} Discord API gerekiyor`);
+      for (let i = 0; i < unresolvedTokens.length; i++) {
+        try {
+          const u = await discordGet('/users/@me', unresolvedTokens[i]) as any;
+          if (u?.id) {
+            map.set(u.id as string, unresolvedTokens[i]);
+            const tk = unresolvedTokens[i].slice(-16);
+            await db.execute(
+              `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, full_token, updated_at) VALUES (?,?,?,?,?)`,
+              [tk, u.id, u.username ?? '', unresolvedTokens[i], new Date()], P,
+            ).catch(() => {});
+            await db.execute(
+              `INSERT INTO ${KEYSPACE}.account_info (account_id, discord_id, username, avatar, last_fetched) VALUES (?,?,?,?,?)`,
+              [u.id, u.id, u.username ?? '', u.avatar ?? '', new Date()], P,
+            ).catch(() => {});
+          }
+        } catch {}
+        if (i < unresolvedTokens.length - 1) await new Promise((r) => setTimeout(r, 1500));
+      }
     }
   }
 
@@ -177,17 +193,25 @@ async function getAccountTokenMap(db: CassandraClient): Promise<Map<string, stri
 }
 
 async function getAccountList(db: CassandraClient): Promise<AccountInfo[]> {
-  // Try Scylla account_info first (cached)
-  const cached = await db.execute(`SELECT * FROM ${KEYSPACE}.account_info`, [], P).catch(() => null);
-  if (cached && cached.rowLength > 0) {
-    const accIdToToken = await getAccountTokenMap(db).catch(() => new Map<string, string>());
-    const tokens = readTokens();
-    const idxByTokenKey = new Map(tokens.map((token, idx) => [token.slice(-16), idx]));
-    return cached.rows.map((r) => {
+  // DB'den account_info + token_account_map birleştir (accounts.json bağımlılığı yok)
+  const [cachedInfo, tokenMap] = await Promise.all([
+    db.execute(`SELECT * FROM ${KEYSPACE}.account_info`, [], P).catch(() => null),
+    getAccountTokenMap(db).catch(() => new Map<string, string>()),
+  ]);
+
+  if (cachedInfo && cachedInfo.rowLength > 0) {
+    // token sırası: token_account_map'teki kayıt sırası (accounts.json sırasıyla uyumlu)
+    const tokenMapRows = await db.execute(`SELECT token_key, account_id FROM ${KEYSPACE}.token_account_map`, [], P).catch(() => null);
+    const idxByAccountId = new Map<string, number>();
+    (tokenMapRows?.rows ?? []).forEach((r, i) => {
+      const aid = (r['account_id'] as string) ?? '';
+      if (aid && !idxByAccountId.has(aid)) idxByAccountId.set(aid, i);
+    });
+
+    return cachedInfo.rows.map((r) => {
       const accountId = (r['account_id'] as string) ?? '';
-      const token = accIdToToken.get(accountId) ?? '';
       return {
-        idx: token ? (idxByTokenKey.get(token.slice(-16)) ?? -1) : -1,
+        idx: idxByAccountId.get(accountId) ?? -1,
         accountId,
         username: (r['username'] as string) ?? '',
         discordId: (r['discord_id'] as string) ?? accountId,
@@ -195,7 +219,7 @@ async function getAccountList(db: CassandraClient): Promise<AccountInfo[]> {
     }).sort((a, b) => a.username.localeCompare(b.username));
   }
 
-  // Fallback: read tokens and fetch from Discord API
+  // Fallback: DB boşsa accounts.json'dan token okuyup Discord API'den çöz
   const tokens = readTokens();
   const accounts: AccountInfo[] = [];
   for (let i = 0; i < tokens.length; i++) {
@@ -207,6 +231,10 @@ async function getAccountList(db: CassandraClient): Promise<AccountInfo[]> {
         await db.execute(
           `INSERT INTO ${KEYSPACE}.account_info (account_id, discord_id, username, avatar, last_fetched) VALUES (?,?,?,?,?)`,
           [u.id, u.id, u.username ?? '', u.avatar ?? '', new Date()], P,
+        ).catch(() => {});
+        await db.execute(
+          `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, full_token, updated_at) VALUES (?,?,?,?,?)`,
+          [tokens[i].slice(-16), u.id, u.username ?? '', tokens[i], new Date()], P,
         ).catch(() => {});
       } else {
         accounts.push({ idx: i, accountId: '', username: `Hesap #${i}`, discordId: '' });

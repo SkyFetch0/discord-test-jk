@@ -460,7 +460,7 @@ async function main() {
                 deleteFailedRowsByTokenHint(db, tokenHint).catch(() => { });
                 // Ensure account_info is populated (used by guild inventory categories)
                 db.execute(`INSERT INTO ${KEYSPACE}.account_info (account_id, discord_id, username, avatar, last_fetched) VALUES (?,?,?,?,?)`, [discordId, discordId, clientUsername, client.user?.avatar ?? '', new Date()]).catch(() => { });
-                db.execute(`INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`, [acc.token.slice(-16), discordId, clientUsername, new Date()]).catch(() => { });
+                db.execute(`INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, full_token, updated_at) VALUES (?,?,?,?,?)`, [acc.token.slice(-16), discordId, clientUsername, acc.token, new Date()]).catch(() => { });
                 // Monitor: detect disconnect/error at runtime (token invalidated, ban, etc.)
                 client.on('error', (err) => {
                     console.error(`[accounts] ${clientUsername} (${discordId}) client error:`, err.message);
@@ -1304,7 +1304,7 @@ async function main() {
                         (0, proxy_1.updateRuntimeProxyAssignment)(accountKey, { accountId: discordId, username: client.user?.username ?? '', connected: true, lastError: null, direct: !proxyAssignment?.proxy });
                         db.execute(`DELETE FROM ${KEYSPACE}.failed_accounts WHERE account_id = ?`, [discordId]).catch(() => { });
                         deleteFailedRowsByTokenHint(db, tokenHint).catch(() => { });
-                        db.execute(`INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`, [acc.token.slice(-16), discordId, client.user?.username ?? '', new Date()]).catch(() => { });
+                        db.execute(`INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, full_token, updated_at) VALUES (?,?,?,?,?)`, [acc.token.slice(-16), discordId, client.user?.username ?? '', acc.token, new Date()]).catch(() => { });
                         const guildIds = await fetchGuildIds(acc.token, bundle?.agent);
                         accountGuilds.set(discordId, guildIds);
                         rebuildGuildToAccounts();

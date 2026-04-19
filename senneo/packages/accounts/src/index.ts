@@ -510,9 +510,10 @@ async function main(): Promise<void> {
         `INSERT INTO ${KEYSPACE}.account_info (account_id, discord_id, username, avatar, last_fetched) VALUES (?,?,?,?,?)`,
         [discordId, discordId, clientUsername, client.user?.avatar ?? '', new Date()],
       ).catch((err: Error) => console.warn(`[accounts] account_info yazma hatası (idx=${gIdx}): ${err?.message}`));
+      // full_token: tam token DB'ye kaydediliyor — accounts.json'a bağımlılık ortadan kalkar
       db.execute(
-        `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`,
-        [acc.token.slice(-16), discordId, clientUsername, new Date()],
+        `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, full_token, updated_at) VALUES (?,?,?,?,?)`,
+        [acc.token.slice(-16), discordId, clientUsername, acc.token, new Date()],
       ).catch((err: Error) => console.warn(`[accounts] token_account_map yazma hatası (idx=${gIdx}): ${err?.message}`));
 
       // Monitor: detect disconnect/error at runtime (token invalidated, ban, etc.)
@@ -1381,9 +1382,10 @@ async function main(): Promise<void> {
               `INSERT INTO ${KEYSPACE}.account_info (account_id, discord_id, username, avatar, last_fetched) VALUES (?,?,?,?,?)`,
               [discordId, discordId, client.user?.username ?? '', client.user?.avatar ?? '', new Date()],
             ).catch((err: Error) => console.warn(`[accounts] account_info yazma hatası (hot-reload idx=${gIdx}): ${err?.message}`));
+            // full_token: tam token DB'ye kaydediliyor
             db.execute(
-              `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`,
-              [acc.token.slice(-16), discordId, client.user?.username ?? '', new Date()],
+              `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, full_token, updated_at) VALUES (?,?,?,?,?)`,
+              [acc.token.slice(-16), discordId, client.user?.username ?? '', acc.token, new Date()],
             ).catch((err: Error) => console.warn(`[accounts] token_account_map yazma hatası (hot-reload idx=${gIdx}): ${err?.message}`));
             const guildIds = await fetchGuildIds(acc.token, bundle?.agent);
             accountGuilds.set(discordId, guildIds);

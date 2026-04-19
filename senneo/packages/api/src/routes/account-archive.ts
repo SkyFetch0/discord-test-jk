@@ -361,9 +361,10 @@ export function accountArchiveRouter(db: CassandraClient): Router {
         `INSERT INTO ${KEYSPACE}.account_info (account_id, discord_id, username, avatar, last_fetched, email, account_password, mail_password, mail_site) VALUES (?,?,?,?,?,?,?,?,?)`,
         [newAccountId, newAccountId, newUsername, userInfo.avatar ?? '', new Date(), previousEmail, previousAccountPassword, previousMailPassword, previousMailSite], P,
       ).catch(() => {});
+      // full_token dahil kayıt — DB-first, accounts.json bağımlılığı yok
       await db.execute(
-        `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, updated_at) VALUES (?,?,?,?)`,
-        [token.slice(-16), newAccountId, newUsername, new Date()], P,
+        `INSERT INTO ${KEYSPACE}.token_account_map (token_key, account_id, username, full_token, updated_at) VALUES (?,?,?,?,?)`,
+        [token.slice(-16), newAccountId, newUsername, token, new Date()], P,
       ).catch(() => {});
 
       const newTokenKey = token.slice(-16);
@@ -377,18 +378,24 @@ export function accountArchiveRouter(db: CassandraClient): Router {
           .filter(tokenKey => !!tokenKey && tokenKey !== newTokenKey),
       );
 
+      // accounts.json'u da güncelle — accounts servisi hâlâ oradan çalışıyor (geçiş dönemi)
       try {
         const raw = fs.existsSync(ACCOUNTS_FILE) ? JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf-8')) : {};
         const storedAccounts = Array.isArray(raw.accounts) ? raw.accounts as { token: string }[] : [];
         const nextAccounts = storedAccounts.filter((entry): entry is { token: string } => typeof entry?.token === 'string' && !staleTokenKeys.has(entry.token.slice(-16)));
         if (!nextAccounts.some(entry => entry.token === token)) {
           nextAccounts.push({ token });
-          console.log(`[archive] Added new token to accounts.json for ${newUsername} (${newAccountId})`);
+          console.log(`[archive] Token accounts.json'a eklendi: ${newUsername} (${newAccountId})`);
         }
         fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify({ accounts: nextAccounts }, null, 2));
         newAccountIdx = nextAccounts.findIndex(entry => entry.token === token);
       } catch (err) {
-        console.warn('[archive] Could not update accounts.json:', err);
+        // accounts.json güncellenemedi — idx DB'den hesaplanır
+        console.warn('[archive] accounts.json güncellenemedi (kritik değil, DB birincil kaynak):', err);
+        try {
+          const dbRows = await db.execute(`SELECT token_key FROM ${KEYSPACE}.token_account_map`).catch(() => null);
+          newAccountIdx = (dbRows?.rows ?? []).findIndex(r => (r['token_key'] as string) === newTokenKey);
+        } catch {}
       }
 
       if (staleTokenKeys.size > 0) {

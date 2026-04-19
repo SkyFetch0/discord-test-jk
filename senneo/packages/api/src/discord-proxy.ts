@@ -2,12 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { normalizeProxyPoolConfig, planProxyAssignments, type NormalizedProxyConfig } from '@senneo/shared';
 
-const ACCOUNTS_FILE = path.resolve(process.cwd(), 'accounts.json');
 const PROXIES_FILE = path.resolve(process.cwd(), 'proxies.json');
+// accounts.json fallback — yalnızca proxy idx hesabı için, geçiş dönemi
+const ACCOUNTS_FILE = path.resolve(process.cwd(), 'accounts.json');
 
 let fallbackProxyCursor = 0;
 
-function readAccounts(): Array<{ token: string }> {
+function readAccountsSync(): Array<{ token: string }> {
   try {
     if (!fs.existsSync(ACCOUNTS_FILE)) return [];
     return JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf-8'))?.accounts ?? [];
@@ -28,7 +29,8 @@ function readProxyPool() {
 function resolveAccountIdx(token?: string, explicitIdx?: number | null): number | null {
   if (explicitIdx != null && explicitIdx >= 0) return explicitIdx;
   if (!token) return null;
-  const accounts = readAccounts();
+  // Proxy atama planı için accounts.json sırası kullanılıyor (accounts servisi de aynı sırayı kullanır)
+  const accounts = readAccountsSync();
   const idx = accounts.findIndex(account => account.token === token);
   return idx >= 0 ? idx : null;
 }
@@ -36,7 +38,7 @@ function resolveAccountIdx(token?: string, explicitIdx?: number | null): number 
 function pickProxy(token?: string, explicitIdx?: number | null): NormalizedProxyConfig | null {
   const pool = readProxyPool();
   if (!pool.enabled) return null;
-  const accounts = readAccounts();
+  const accounts = readAccountsSync();
   const enabled = pool.proxies.filter(proxy => proxy.enabled);
   if (enabled.length === 0) return null;
 
