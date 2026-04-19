@@ -964,6 +964,87 @@ async function main(): Promise<void> {
         lastErrorAt: nowIso,
       });
       await flushStats().catch(() => {});
+
+      // TOKEN GEÇERSİZ (401) — hesabı failed_accounts'a yaz ve otomatik arşivle
+      // Bu tetiklenince dashboard "Transfer Et" seçeneği gösterir
+      if (result.code === 'discord_401') {
+        const clientUsername = (clients.get(accId) as any)?.user?.username ?? '';
+        const accToken = tokenById.get(accId) ?? '';
+        const tHint = accToken ? failedTokenHint(accToken) : '***';
+
+        // 1. failed_accounts'a yaz (dashboard bundan okuyup "Transfer Et" gösterir)
+        db.execute(
+          `INSERT INTO ${KEYSPACE}.failed_accounts (account_id, username, token_hint, reason, error_msg, detected_at) VALUES (?,?,?,?,?,?)`,
+          [accId, clientUsername, tHint, 'token_invalid', `HTTP 401 scraping ${target.channelId} — token geçersiz veya ban`, new Date()],
+        ).catch((err: Error) => console.warn(`[accounts] failed_accounts (401) yazma hatası: ${err?.message}`));
+
+        // 2. Bu hesabın tüm kanallarını durdur — diğer kanallar için de 401 alacak
+        const alreadyMarked401 = (clients.get(accId) as any)?._token401marked;
+        if (!alreadyMarked401) {
+          (clients.get(accId) as any)._token401marked = true;
+          console.error(`[accounts] ✗ ${clientUsername} (${accId}) TOKEN GEÇERSİZ — tüm kanallar durduruluyor, hesap failed olarak işaretlendi`);
+          emit('scrape_error', `${clientUsername || accId} token geçersiz (401)`, { accountId: accId, accountName: clientUsername || accId });
+          updateRuntimeProxyAssignment(accountKeyById.get(accId) ?? `idx:unknown`, { accountId: accId, username: clientUsername, connected: false, lastError: 'Token geçersiz (HTTP 401)' });
+
+          // 3. Otomatik arşivleme: API'daki /archive/accounts/:id endpoint'ini in-process çağır
+          //    Bu hesabın tüm guild/kanal bilgilerini archived_accounts'a snapshot'lar
+          setImmediate(async () => {
+            try {
+              const archiveResult = await db.execute(
+                `SELECT account_id FROM ${KEYSPACE}.archived_accounts WHERE account_id = ?`, [accId],
+              ).catch(() => null);
+              if (archiveResult && archiveResult.rowLength > 0) {
+                console.log(`[accounts] ${accId} zaten arşivlenmiş, tekrar arşivleniyor (güncel snapshot)…`);
+              }
+              // archived_accounts header
+              let username2 = clientUsername, avatar2 = '';
+              const accInfoRow = await db.execute(
+                `SELECT username, avatar FROM ${KEYSPACE}.account_info WHERE account_id = ?`, [accId],
+              ).catch(() => null);
+              if (accInfoRow?.rowLength) {
+                username2 = (accInfoRow.rows[0]['username'] as string) ?? clientUsername;
+                avatar2   = (accInfoRow.rows[0]['avatar']   as string) ?? '';
+              }
+              const guildsSnap = await db.execute(
+                `SELECT guild_id, guild_name, guild_icon, guild_owner FROM ${KEYSPACE}.account_guilds WHERE account_id = ?`, [accId],
+              ).catch(() => null);
+              const guildCount = guildsSnap?.rowLength ?? 0;
+              const targetsSnap = await db.execute(
+                `SELECT channel_id FROM ${KEYSPACE}.scrape_targets`, [],
+              ).catch(() => null);
+              const myChannels = (targetsSnap?.rows ?? []).filter(r =>
+                ((r['pinned_account_id'] as string) ?? (r['account_id'] as string)) === accId,
+              );
+              await db.execute(
+                `INSERT INTO ${KEYSPACE}.archived_accounts (account_id, username, avatar, archived_at, reason, guild_count, channel_count, total_scraped) VALUES (?,?,?,?,?,?,?,?)`,
+                [accId, username2, avatar2, new Date(), 'token_invalid_401', guildCount, myChannels.length, 0],
+              ).catch((e: Error) => console.warn(`[accounts] archived_accounts yazma hatası: ${e?.message}`));
+              // guild snapshot
+              for (const gr of (guildsSnap?.rows ?? [])) {
+                await db.execute(
+                  `INSERT INTO ${KEYSPACE}.archived_account_guilds (account_id, guild_id, guild_name, guild_icon, invite_code, membership) VALUES (?,?,?,?,?,?)`,
+                  [accId, gr['guild_id'], gr['guild_name'] ?? '', gr['guild_icon'] ?? '', '', 'member'],
+                ).catch(() => {});
+              }
+              // channel snapshot
+              for (const cr of myChannels) {
+                const cid = cr['channel_id'] as string;
+                const cpRow = await db.execute(
+                  `SELECT total_scraped, complete, cursor_id, newest_message_id, guild_id FROM ${KEYSPACE}.scrape_checkpoints WHERE channel_id = ?`, [cid],
+                ).catch(() => null);
+                const cp = cpRow?.rows[0];
+                await db.execute(
+                  `INSERT INTO ${KEYSPACE}.archived_account_channels (account_id, channel_id, guild_id, channel_name, total_scraped, complete, cursor_id, newest_message_id) VALUES (?,?,?,?,?,?,?,?)`,
+                  [accId, cid, cp?.['guild_id'] ?? target.guildId, '', Number(cp?.['total_scraped'] ?? 0), cp?.['complete'] ?? false, cp?.['cursor_id'] ?? null, cp?.['newest_message_id'] ?? null],
+                ).catch(() => {});
+              }
+              console.log(`[accounts] ✓ ${username2} (${accId}) otomatik arşivlendi: ${guildCount} guild, ${myChannels.length} kanal`);
+            } catch (archErr) {
+              console.warn(`[accounts] Otomatik arşivleme hatası (${accId}):`, archErr);
+            }
+          });
+        }
+      }
     } else if (result.kind === 'aborted' && stopMatches && (stop.reason === 'pause_account' || stop.reason === 'pause_channel')) {
       const flushed = await flushCheckpoint(target.channelId);
       enqueued.delete(target.channelId);
